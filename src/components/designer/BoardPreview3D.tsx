@@ -10,12 +10,12 @@ import {
   OrbitControls,
   RoundedBox,
 } from "@react-three/drei";
-
 import type { BoardColor } from "@/lib/fitting";
 
 interface BoardPreview3DProps {
   photoUrl: string;
   boardColor: BoardColor;
+  boardAspect: number;
 }
 
 function applyCoverUV(texture: THREE.Texture, aspect: number) {
@@ -49,15 +49,19 @@ function RendererSettings() {
 export default function BoardPreview3D({
   photoUrl,
   boardColor,
+  boardAspect,
 }: BoardPreview3DProps) {
   const texture = usePhotoTexture(photoUrl);
+  const board = boardAspect > 0 ? boardAspect : 1;
+  const boardWidth = board >= 1 ? 2 : 2 * board;
+  const boardHeight = board >= 1 ? 2 / board : 2;
   const bodyColor = boardColor === "white" ? "#ffffff" : "#111827";
-  const frameColor = boardColor === "white" ? "#f8fafc" : "#1f2937";
+  const shadowY = -(boardHeight / 2) - 0.42;
 
   return (
     <Canvas
       dpr={[1, 1.75]}
-      camera={{ position: [1.35, 0.75, 3.9], fov: 35 }}
+      camera={{ position: [1.35, 0.75, 4.1], fov: 35 }}
       gl={{ antialias: true, alpha: true }}
     >
       <RendererSettings />
@@ -66,16 +70,16 @@ export default function BoardPreview3D({
       <directionalLight position={[-5, -2, 4]} intensity={0.55} />
       <directionalLight position={[-4, 3, -5]} intensity={0.4} />
       <group>
-        <RoundedBox args={[2, 2, 0.09]} radius={0.025} smoothness={4}>
+        <RoundedBox
+          args={[boardWidth, boardHeight, 0.09]}
+          radius={0.025}
+          smoothness={4}
+        >
           <meshStandardMaterial color={bodyColor} roughness={0.62} />
         </RoundedBox>
-        <mesh position={[0, 0, 0.046]}>
-          <planeGeometry args={[1.97, 1.97]} />
-          <meshStandardMaterial color={frameColor} roughness={0.8} />
-        </mesh>
         <mesh position={[0, 0, 0.048]}>
-          <planeGeometry args={[1.88, 1.88]} />
-          <meshBasicMaterial map={texture} toneMapped={false} />
+          <planeGeometry args={[boardWidth * 0.985, boardHeight * 0.985]} />
+          <meshBasicMaterial map={texture} color="#ffffff" toneMapped={false} />
         </mesh>
         <mesh position={[0, 0, -0.065]} rotation-x={Math.PI / 2}>
           <cylinderGeometry args={[0.2, 0.2, 0.04, 32]} />
@@ -98,7 +102,7 @@ export default function BoardPreview3D({
         />
       </Environment>
       <ContactShadows
-        position={[0, -1.42, 0]}
+        position={[0, shadowY, 0]}
         opacity={0.28}
         scale={7}
         blur={3}

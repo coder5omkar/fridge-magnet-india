@@ -26,7 +26,7 @@ export const metadata: Metadata = {
   keywords: [
     "photo magnet",
     "custom fridge magnet India",
-    "photo magnet 8x8",
+    "photo magnet up to 8 inch",
     "personalised photo gift",
     "MemoryMagnet",
   ],

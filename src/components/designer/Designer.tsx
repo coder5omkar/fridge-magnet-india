@@ -19,6 +19,8 @@ import {
 } from "@/components/icons";
 import { siteConfig, telLink, whatsappLink } from "@/lib/config";
 import {
+  boardDimensions,
+  canvasSizeForBoard,
   defaultEdit,
   drawComposite,
   renderToBlob,
@@ -29,7 +31,6 @@ import { PhotoError, preparePhoto, type PhotoInfo } from "@/lib/photo";
 import {
   MAX_MAGNETS,
   PRODUCT,
-  SIZE_LABEL,
   computePrice,
   formatINR,
 } from "@/lib/products";
@@ -84,6 +85,10 @@ function getImage(url: string): Promise<HTMLImageElement> {
 
 function aspectOf(photo: PhotoInfo): number {
   return photo.width / photo.height || 1;
+}
+
+function dimensionsOf(photo: PhotoInfo) {
+  return boardDimensions(aspectOf(photo));
 }
 
 function tabClasses(active: boolean): string {
@@ -157,6 +162,7 @@ export default function Designer() {
   const count = realPhotos.length;
   const hasSamples = photos.some((photo) => photo.sample);
   const price = computePrice(count);
+  const selectedDimensions = selected ? dimensionsOf(selected) : null;
 
   useEffect(() => {
     if (order) {
@@ -181,10 +187,18 @@ export default function Designer() {
   function bakePreview(photo: MagnetPhoto) {
     getImage(photo.url)
       .then((image) => {
+        const dimensions = dimensionsOf(photo);
+        const size = canvasSizeForBoard(dimensions.aspect, 640);
         const canvas = document.createElement("canvas");
-        canvas.width = 640;
-        canvas.height = 640;
-        drawComposite(canvas, image, aspectOf(photo), photo.edit);
+        canvas.width = size.width;
+        canvas.height = size.height;
+        drawComposite(
+          canvas,
+          image,
+          aspectOf(photo),
+          dimensions.aspect,
+          photo.edit
+        );
         const previewUrl = canvas.toDataURL("image/jpeg", 0.85);
         setPhotos((current) =>
           current.map((item) =>
@@ -196,7 +210,7 @@ export default function Designer() {
           {
             key: photo.key,
             boardColor: photo.edit.boardColor,
-            fit: photo.edit.fit,
+            mode: photo.edit.mode,
           },
           "success"
         );
@@ -227,7 +241,7 @@ export default function Designer() {
     log("photo_edited", {
       key,
       boardColor: edit.boardColor,
-      fit: edit.fit,
+      mode: edit.mode,
       zoom: edit.zoom,
     });
     if (target) scheduleBake({ ...target, edit });
@@ -334,7 +348,7 @@ export default function Designer() {
     const lines = [
       `New order ${orderId} from ${siteConfig.name}`,
       "",
-      `${PRODUCT.name} (${SIZE_LABEL}) x ${items.length}`,
+      `${PRODUCT.name} x ${items.length}`,
     ];
     if (price.discountAmount > 0) {
       lines.push(
@@ -346,13 +360,14 @@ export default function Designer() {
     }
     lines.push(`Total: ${formatINR(price.total)}`, "", "My photos for printing:");
     items.forEach((photo, index) => {
+      const dimensions = dimensionsOf(photo);
       lines.push(
-        `${index + 1}. ${photo.name} (${photo.edit.boardColor} board)`
+        `${index + 1}. ${photo.name} (${dimensions.widthIn} x ${dimensions.heightIn} inch, ${photo.edit.boardColor} board)`
       );
     });
     lines.push(
       "",
-      "I am sharing my edited photos with this order (ready-to-print 8 x 8 inch squares).",
+      "I am sharing my edited photos with this order (print-ready magnets with margins and board colour applied).",
       "I will share my delivery address here as well."
     );
     return lines.join("\n");
@@ -365,9 +380,11 @@ export default function Designer() {
       let created = false;
       try {
         const image = await getImage(photo.url);
+        const dimensions = dimensionsOf(photo);
         const blob = await renderToBlob(
           image,
           aspectOf(photo),
+          dimensions.aspect,
           photo.edit,
           1600,
           "image/jpeg",
@@ -524,12 +541,16 @@ export default function Designer() {
           <p className="mx-auto mt-3 max-w-md text-sm leading-6 text-slate-600">
             {helper}
           </p>
-          <ol className="mx-auto mt-4 max-w-xs space-y-1 text-left text-xs text-slate-500">
-            {realPhotos.map((photo, index) => (
-              <li key={photo.key} className="truncate">
-                {index + 1}. {photo.name} ({photo.edit.boardColor} board)
-              </li>
-            ))}
+              <ol className="mx-auto mt-4 max-w-xs space-y-1 text-left text-xs text-slate-500">
+            {realPhotos.map((photo, index) => {
+              const dimensions = dimensionsOf(photo);
+              return (
+                <li key={photo.key} className="truncate">
+                  {index + 1}. {photo.name} ({dimensions.widthIn} x{" "}
+                  {dimensions.heightIn} inch, {photo.edit.boardColor} board)
+                </li>
+              );
+            })}
           </ol>
           <div className="mt-6 flex flex-wrap items-center justify-center gap-3">
             <a
@@ -669,7 +690,10 @@ export default function Designer() {
               previewView === "edit" ? (
                 <PhotoEditor
                   photoUrl={selected.url}
-                  aspect={aspectOf(selected)}
+                  photoAspect={aspectOf(selected)}
+                  boardAspect={selectedDimensions?.aspect ?? 1}
+                  boardWidthIn={selectedDimensions?.widthIn ?? 8}
+                  boardHeightIn={selectedDimensions?.heightIn ?? 8}
                   edit={selected.edit}
                   onChange={(next) => updateEdit(selected.key, next)}
                 />
@@ -685,6 +709,7 @@ export default function Designer() {
                     <BoardPreview3D
                       photoUrl={selected.previewUrl ?? selected.url}
                       boardColor={selected.edit.boardColor}
+                      boardAspect={selectedDimensions?.aspect ?? 1}
                     />
                   </div>
                   <span className="pointer-events-none absolute bottom-3 left-1/2 flex -translate-x-1/2 items-center gap-1.5 whitespace-nowrap rounded-full bg-slate-900/70 px-3 py-1 text-[11px] font-medium text-white">
@@ -713,7 +738,8 @@ export default function Designer() {
               <div className="flex items-center justify-between gap-3 border-t border-slate-100 px-5 py-3">
                 <p className="min-w-0 truncate text-xs text-slate-500">
                   {selected.sample ? "Sample design" : selected.name} /{" "}
-                  {selected.edit.boardColor} board
+                  {selectedDimensions?.widthIn} x {selectedDimensions?.heightIn}{" "}
+                  inch / {selected.edit.boardColor} board
                 </p>
                 <button
                   type="button"
@@ -906,7 +932,7 @@ export default function Designer() {
             </div>
             <p className="mt-3 text-xs text-slate-500">
               Tap a photo to preview it, then use &ldquo;Adjust photo&rdquo; to
-              move, zoom or change the board colour.
+              move, zoom, add a margin or change the board colour.
             </p>
           </div>
         ) : null}
@@ -938,7 +964,7 @@ export default function Designer() {
           <dl className="mt-5 space-y-2 text-sm">
             <div className="flex items-center justify-between text-slate-600">
               <dt>
-                {count} x {PRODUCT.name} ({SIZE_LABEL})
+                {count} x {PRODUCT.name}, sizes matched to your photos
               </dt>
               <dd className="font-medium text-slate-800">
                 {formatINR(price.subtotal)}

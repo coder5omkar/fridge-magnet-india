@@ -1,11 +1,21 @@
 "use client";
 
 import { useRef, type PointerEvent } from "react";
-import { computeTransform, type PhotoEdit } from "@/lib/fitting";
+import {
+  BEZEL_ZOOM_MAX,
+  BEZEL_ZOOM_MIN,
+  FULL_ZOOM_MAX,
+  FULL_ZOOM_MIN,
+  computeTransform,
+  type PhotoEdit,
+} from "@/lib/fitting";
 
 interface PhotoEditorProps {
   photoUrl: string;
-  aspect: number;
+  photoAspect: number;
+  boardAspect: number;
+  boardWidthIn: number;
+  boardHeightIn: number;
   edit: PhotoEdit;
   onChange: (edit: PhotoEdit) => void;
 }
@@ -28,17 +38,22 @@ function chipClasses(active: boolean): string {
 
 export default function PhotoEditor({
   photoUrl,
-  aspect,
+  photoAspect,
+  boardAspect,
+  boardWidthIn,
+  boardHeightIn,
   edit,
   onChange,
 }: PhotoEditorProps) {
   const containerRef = useRef<HTMLDivElement | null>(null);
   const dragRef = useRef<DragState | null>(null);
 
-  const transform = computeTransform(aspect, edit);
+  const transform = computeTransform(photoAspect, boardAspect, edit);
+  const zoomMin = edit.mode === "bezel" ? BEZEL_ZOOM_MIN : FULL_ZOOM_MIN;
+  const zoomMax = edit.mode === "bezel" ? BEZEL_ZOOM_MAX : FULL_ZOOM_MAX;
 
   function clampOffsets(next: PhotoEdit): PhotoEdit {
-    const nextTransform = computeTransform(aspect, next);
+    const nextTransform = computeTransform(photoAspect, boardAspect, next);
     return {
       ...next,
       offsetX: nextTransform.centerX - 0.5,
@@ -88,8 +103,12 @@ export default function PhotoEditor({
         onPointerMove={handlePointerMove}
         onPointerUp={handlePointerUp}
         onPointerCancel={handlePointerUp}
-        className="relative aspect-square w-full cursor-grab touch-none select-none overflow-hidden rounded-2xl border border-slate-200 active:cursor-grabbing"
-        style={{ backgroundColor: edit.boardColor === "white" ? "#ffffff" : "#111827" }}
+        className="relative w-full cursor-grab touch-none select-none overflow-hidden rounded-2xl border border-slate-200 active:cursor-grabbing"
+        style={{
+          aspectRatio: String(boardAspect),
+          backgroundColor:
+            edit.boardColor === "white" ? "#ffffff" : "#111827",
+        }}
       >
         <div
           className="pointer-events-none absolute"
@@ -106,28 +125,40 @@ export default function PhotoEditor({
         />
       </div>
 
+      <div className="flex items-center justify-between rounded-xl bg-slate-50 px-3 py-2">
+        <span className="text-xs font-medium text-slate-500">Board size</span>
+        <span className="text-xs font-bold text-slate-800">
+          {boardWidthIn} x {boardHeightIn} inch, matched to your photo
+        </span>
+      </div>
+
       <div className="grid grid-cols-2 gap-2">
         <button
           type="button"
           onClick={() =>
-            onChange({ ...edit, fit: "fill", zoom: 1, offsetX: 0, offsetY: 0 })
+            onChange({ ...edit, mode: "full", zoom: 1, offsetX: 0, offsetY: 0 })
           }
-          aria-pressed={edit.fit === "fill"}
-          className={chipClasses(edit.fit === "fill")}
+          aria-pressed={edit.mode === "full"}
+          className={chipClasses(edit.mode === "full")}
         >
-          Fill square
+          No bezel
         </button>
         <button
           type="button"
           onClick={() =>
-            onChange({ ...edit, fit: "fit", zoom: 1, offsetX: 0, offsetY: 0 })
+            onChange({ ...edit, mode: "bezel", zoom: 1, offsetX: 0, offsetY: 0 })
           }
-          aria-pressed={edit.fit === "fit"}
-          className={chipClasses(edit.fit === "fit")}
+          aria-pressed={edit.mode === "bezel"}
+          className={chipClasses(edit.mode === "bezel")}
         >
-          Fit whole photo
+          With margin
         </button>
       </div>
+
+      <p className="text-center text-[11px] leading-4 text-slate-500">
+        No bezel fills the whole board. With margin adds a border on every
+        side.
+      </p>
 
       <div>
         <div className="flex items-center justify-between text-xs font-medium text-slate-500">
@@ -136,8 +167,8 @@ export default function PhotoEditor({
         </div>
         <input
           type="range"
-          min={1}
-          max={3}
+          min={zoomMin}
+          max={zoomMax}
           step={0.05}
           value={edit.zoom}
           onChange={(event) =>
@@ -146,6 +177,11 @@ export default function PhotoEditor({
           aria-label="Zoom"
           className="mt-2 w-full accent-ocean-600"
         />
+        {edit.mode === "bezel" ? (
+          <p className="mt-1 text-[11px] text-slate-400">
+            Slide left to make the photo smaller on the board.
+          </p>
+        ) : null}
       </div>
 
       <div className="flex items-center justify-between gap-4">
@@ -172,7 +208,13 @@ export default function PhotoEditor({
         <button
           type="button"
           onClick={() =>
-            onChange({ ...edit, fit: "fill", zoom: 1, offsetX: 0, offsetY: 0 })
+            onChange({
+              ...edit,
+              mode: "full",
+              zoom: 1,
+              offsetX: 0,
+              offsetY: 0,
+            })
           }
           className="text-xs font-semibold text-ocean-700 transition hover:underline"
         >

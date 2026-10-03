@@ -9,7 +9,7 @@ import {
   TruckIcon,
 } from "@/components/icons";
 import { siteConfig } from "@/lib/config";
-import { PRODUCT, SIZE_LABEL, formatINR } from "@/lib/products";
+import { PRODUCT, formatINR } from "@/lib/products";
 
 const trustItems = [
   { icon: TruckIcon, label: "Free shipping on 2+ magnets" },
@@ -22,9 +22,9 @@ export default function Home() {
   const jsonLd = {
     "@context": "https://schema.org",
     "@type": "Product",
-    name: `${SIZE_LABEL} ${PRODUCT.name}`,
+    name: `${PRODUCT.name} - sized to match your photo`,
     description:
-      "Custom 8 x 8 inch photo magnet printed on lightweight matte board, delivered across India.",
+      "Custom photo magnet printed on lightweight matte board, sized to match your photo up to 8 inches, delivered across India.",
     brand: { "@type": "Brand", name: siteConfig.name },
     offers: {
       "@type": "Offer",
@@ -56,8 +56,9 @@ export default function Home() {
               </span>
             </h1>
             <p className="mt-5 max-w-xl text-lg leading-8 text-slate-600">
-              {SIZE_LABEL} photo magnets with a smooth matte finish. Upload your
-              photos, preview every magnet in 3D, and order on WhatsApp.
+              Photo magnets sized to match your photo - square, portrait or
+              landscape, up to 8 inches. Upload your photos, preview every
+              magnet in 3D, and order on WhatsApp.
             </p>
             <div className="mt-8 flex flex-wrap items-center gap-4">
               <Link
@@ -104,7 +105,7 @@ export default function Home() {
                 {formatINR(PRODUCT.price)} each
               </span>
               <span className="absolute -bottom-3 right-4 rounded-full border border-slate-100 bg-white px-3 py-1 text-[11px] font-semibold text-slate-700 shadow">
-                Matte finish / 8 x 8 inch
+                Matte finish / matched size
               </span>
             </div>
           </div>

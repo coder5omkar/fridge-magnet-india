@@ -1,5 +1,3 @@
-export const SIZE_LABEL = "8 x 8 inch";
-
 export const PRODUCT = {
   name: "Photo Magnet",
   price: 249,
