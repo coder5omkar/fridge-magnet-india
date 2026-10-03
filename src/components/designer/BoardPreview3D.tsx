@@ -11,8 +11,11 @@ import {
   RoundedBox,
 } from "@react-three/drei";
 
+import type { BoardColor } from "@/lib/fitting";
+
 interface BoardPreview3DProps {
   photoUrl: string;
+  boardColor: BoardColor;
 }
 
 function applyCoverUV(texture: THREE.Texture, aspect: number) {
@@ -43,8 +46,13 @@ function RendererSettings() {
   return null;
 }
 
-export default function BoardPreview3D({ photoUrl }: BoardPreview3DProps) {
+export default function BoardPreview3D({
+  photoUrl,
+  boardColor,
+}: BoardPreview3DProps) {
   const texture = usePhotoTexture(photoUrl);
+  const bodyColor = boardColor === "white" ? "#ffffff" : "#111827";
+  const frameColor = boardColor === "white" ? "#f8fafc" : "#1f2937";
 
   return (
     <Canvas
@@ -59,11 +67,11 @@ export default function BoardPreview3D({ photoUrl }: BoardPreview3DProps) {
       <directionalLight position={[-4, 3, -5]} intensity={0.4} />
       <group>
         <RoundedBox args={[2, 2, 0.09]} radius={0.025} smoothness={4}>
-          <meshStandardMaterial color="#ffffff" roughness={0.62} />
+          <meshStandardMaterial color={bodyColor} roughness={0.62} />
         </RoundedBox>
         <mesh position={[0, 0, 0.046]}>
           <planeGeometry args={[1.97, 1.97]} />
-          <meshStandardMaterial color="#ffffff" roughness={0.8} />
+          <meshStandardMaterial color={frameColor} roughness={0.8} />
         </mesh>
         <mesh position={[0, 0, 0.048]}>
           <planeGeometry args={[1.88, 1.88]} />

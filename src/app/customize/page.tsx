@@ -47,18 +47,20 @@ export default function CustomizePage() {
             </p>
             <p>
               <span className="font-semibold text-slate-800">
-                2. Check the preview
+                2. Make it perfect
               </span>
               <br />
-              Tap any photo to rotate it in 3D and confirm the crop.
+              Move, zoom and pick a white or black board. What you see is
+              exactly what gets printed.
             </p>
             <p>
               <span className="font-semibold text-slate-800">
                 3. Send on WhatsApp
               </span>
               <br />
-              We open WhatsApp with your order summary. Attach the photos and
-              share your address in the chat. Pay by UPI after confirmation.
+              Your edited photos attach automatically on supported phones, or
+              download them and attach in the chat. Pay by UPI after
+              confirmation.
             </p>
           </div>
         </div>

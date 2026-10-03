@@ -7,15 +7,23 @@ import {
   CheckIcon,
   CloseIcon,
   CopyIcon,
+  DownloadIcon,
   ExpandIcon,
   ImageIcon,
   MessageIcon,
+  PencilIcon,
   PhoneIcon,
   PlusIcon,
   RotateIcon,
   UploadIcon,
 } from "@/components/icons";
 import { siteConfig, telLink, whatsappLink } from "@/lib/config";
+import {
+  defaultEdit,
+  drawComposite,
+  renderToBlob,
+  type PhotoEdit,
+} from "@/lib/fitting";
 import { log } from "@/lib/logger";
 import { PhotoError, preparePhoto, type PhotoInfo } from "@/lib/photo";
 import {
@@ -26,6 +34,7 @@ import {
   formatINR,
 } from "@/lib/products";
 import { sampleDataUrl } from "@/lib/sampleArt";
+import PhotoEditor from "./PhotoEditor";
 
 const BoardPreview3D = dynamic(() => import("./BoardPreview3D"), {
   ssr: false,
@@ -38,15 +47,51 @@ interface MagnetPhoto extends PhotoInfo {
   key: string;
   sample?: boolean;
   file?: File;
+  edit: PhotoEdit;
+  previewUrl?: string;
 }
 
 type OrderMethod = "share" | "whatsapp" | "cancelled";
+type PreviewView = "3d" | "edit";
 
 interface OrderInfo {
   id: string;
   message: string;
   method: OrderMethod;
   count: number;
+  files: File[];
+}
+
+const imageCache = new Map<string, HTMLImageElement>();
+
+function getImage(url: string): Promise<HTMLImageElement> {
+  const cached = imageCache.get(url);
+  if (cached) return Promise.resolve(cached);
+  return new Promise((resolve, reject) => {
+    const image = new Image();
+    image.onload = () => {
+      if (imageCache.size > 40) {
+        const firstKey = imageCache.keys().next().value;
+        if (firstKey) imageCache.delete(firstKey);
+      }
+      imageCache.set(url, image);
+      resolve(image);
+    };
+    image.onerror = () => reject(new Error("Could not load image"));
+    image.src = url;
+  });
+}
+
+function aspectOf(photo: PhotoInfo): number {
+  return photo.width / photo.height || 1;
+}
+
+function tabClasses(active: boolean): string {
+  return `flex items-center justify-center gap-1.5 rounded-lg px-3 py-2 text-xs font-semibold transition ${
+    active
+      ? "bg-white text-ocean-700 shadow-sm"
+      : "text-slate-500 hover:text-slate-700"
+  }`;
 }
 
 function createSamplePhotos(): MagnetPhoto[] {
@@ -58,6 +103,7 @@ function createSamplePhotos(): MagnetPhoto[] {
     height: 256,
     sizeBytes: 0,
     sample: true,
+    edit: defaultEdit,
   }));
 }
 
@@ -65,6 +111,11 @@ function createOrderId(): string {
   const random = Math.random().toString(36).slice(2, 6).toUpperCase();
   const stamp = Date.now().toString(36).slice(-3).toUpperCase();
   return `FM-${random}${stamp}`;
+}
+
+function createPhotoKey(index: number): string {
+  const random = Math.random().toString(36).slice(2, 7);
+  return `${Date.now().toString(36)}-${index}-${random}`;
 }
 
 function canShareFiles(files: File[]): boolean {
@@ -83,6 +134,7 @@ export default function Designer() {
     createSamplePhotos()
   );
   const [selectedKey, setSelectedKey] = useState<string | null>(null);
+  const [previewView, setPreviewView] = useState<PreviewView>("3d");
   const [busy, setBusy] = useState(false);
   const [progress, setProgress] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -95,6 +147,9 @@ export default function Designer() {
   const fileRef = useRef<HTMLInputElement>(null);
   const previewRef = useRef<HTMLDivElement>(null);
   const topRef = useRef<HTMLDivElement>(null);
+  const bakeTimersRef = useRef(
+    new Map<string, ReturnType<typeof setTimeout>>()
+  );
 
   const selected =
     photos.find((photo) => photo.key === selectedKey) ?? photos[0] ?? null;
@@ -123,7 +178,68 @@ export default function Designer() {
     };
   }, [expanded]);
 
-  async function addFiles(fileList: File[]) {
+  function bakePreview(photo: MagnetPhoto) {
+    getImage(photo.url)
+      .then((image) => {
+        const canvas = document.createElement("canvas");
+        canvas.width = 640;
+        canvas.height = 640;
+        drawComposite(canvas, image, aspectOf(photo), photo.edit);
+        const previewUrl = canvas.toDataURL("image/jpeg", 0.85);
+        setPhotos((current) =>
+          current.map((item) =>
+            item.key === photo.key ? { ...item, previewUrl } : item
+          )
+        );
+        log(
+          "photo_preview_baked",
+          {
+            key: photo.key,
+            boardColor: photo.edit.boardColor,
+            fit: photo.edit.fit,
+          },
+          "success"
+        );
+      })
+      .catch(() => {
+        log("photo_preview_failed", { key: photo.key }, "warn");
+      });
+  }
+
+  function scheduleBake(photo: MagnetPhoto) {
+    const timers = bakeTimersRef.current;
+    const existing = timers.get(photo.key);
+    if (existing) clearTimeout(existing);
+    timers.set(
+      photo.key,
+      setTimeout(() => {
+        timers.delete(photo.key);
+        bakePreview(photo);
+      }, 200)
+    );
+  }
+
+  function updateEdit(key: string, edit: PhotoEdit) {
+    const target = photos.find((item) => item.key === key);
+    setPhotos((current) =>
+      current.map((item) => (item.key === key ? { ...item, edit } : item))
+    );
+    log("photo_edited", {
+      key,
+      boardColor: edit.boardColor,
+      fit: edit.fit,
+      zoom: edit.zoom,
+    });
+    if (target) scheduleBake({ ...target, edit });
+  }
+
+  function selectPhoto(key: string) {
+    setSelectedKey(key);
+    const photo = photos.find((item) => item.key === key);
+    if (photo && !photo.previewUrl) scheduleBake(photo);
+  }
+
+  async function handleAddFiles(fileList: File[]) {
     if (fileList.length === 0) return;
     const remaining = MAX_MAGNETS - count;
     if (remaining <= 0) {
@@ -156,8 +272,9 @@ export default function Designer() {
         const info = await preparePhoto(batch[index]);
         added.push({
           ...info,
-          key: `${Date.now()}-${index}-${Math.random().toString(36).slice(2, 7)}`,
+          key: createPhotoKey(index),
           file: batch[index],
+          edit: defaultEdit,
         });
         log(
           "photo_ready",
@@ -183,6 +300,8 @@ export default function Designer() {
         ...added,
       ]);
       setSelectedKey(added[0].key);
+      setPreviewView("3d");
+      scheduleBake(added[0]);
       log("photos_added", { count: added.length }, "success");
       if (hadSamples) log("samples_removed", { reason: "auto" });
       if (firstAdd) {
@@ -227,14 +346,53 @@ export default function Designer() {
     }
     lines.push(`Total: ${formatINR(price.total)}`, "", "My photos for printing:");
     items.forEach((photo, index) => {
-      lines.push(`${index + 1}. ${photo.name}`);
+      lines.push(
+        `${index + 1}. ${photo.name} (${photo.edit.boardColor} board)`
+      );
     });
     lines.push(
       "",
-      "I am sharing my photos with this order.",
+      "I am sharing my edited photos with this order (ready-to-print 8 x 8 inch squares).",
       "I will share my delivery address here as well."
     );
     return lines.join("\n");
+  }
+
+  async function buildEditedFiles(items: MagnetPhoto[]): Promise<File[]> {
+    const files: File[] = [];
+    for (let index = 0; index < items.length; index++) {
+      const photo = items[index];
+      let created = false;
+      try {
+        const image = await getImage(photo.url);
+        const blob = await renderToBlob(
+          image,
+          aspectOf(photo),
+          photo.edit,
+          1600,
+          "image/jpeg",
+          0.92
+        );
+        if (blob) {
+          files.push(
+            new File([blob], `MemoryMagnet-${index + 1}.jpg`, {
+              type: "image/jpeg",
+            })
+          );
+          created = true;
+        }
+      } catch (caught) {
+        log(
+          "edited_photo_failed",
+          { name: photo.name, message: String(caught) },
+          "warn"
+        );
+      }
+      if (!created && photo.file) {
+        files.push(photo.file);
+      }
+    }
+    return files;
   }
 
   async function handleOrder() {
@@ -242,13 +400,22 @@ export default function Designer() {
       log("order_blocked_no_photos", {}, "warn");
       return;
     }
+    setSharing(true);
     const orderId = createOrderId();
     const message = buildMessage(orderId, realPhotos);
-    const files = realPhotos
-      .map((photo) => photo.file)
-      .filter((file): file is File => Boolean(file));
 
-    setSharing(true);
+    let files: File[] = [];
+    try {
+      files = await buildEditedFiles(realPhotos);
+      log(
+        "edited_photos_ready",
+        { orderId, count: files.length },
+        files.length > 0 ? "success" : "warn"
+      );
+    } catch (caught) {
+      log("edited_export_failed", { orderId, message: String(caught) }, "warn");
+    }
+
     let method: OrderMethod = "whatsapp";
     if (canShareFiles(files)) {
       try {
@@ -291,7 +458,7 @@ export default function Designer() {
     }
     setSharing(false);
     setExpanded(false);
-    setOrder({ id: orderId, message, method, count });
+    setOrder({ id: orderId, message, method, count, files });
   }
 
   async function copyOrder() {
@@ -305,10 +472,32 @@ export default function Designer() {
     }
   }
 
+  function downloadEditedFiles() {
+    if (!order || order.files.length === 0) return;
+    order.files.forEach((file, index) => {
+      window.setTimeout(() => {
+        const url = URL.createObjectURL(file);
+        const link = document.createElement("a");
+        link.href = url;
+        link.download = file.name;
+        document.body.appendChild(link);
+        link.click();
+        link.remove();
+        window.setTimeout(() => URL.revokeObjectURL(url), 4000);
+      }, index * 350);
+    });
+    log(
+      "photos_downloaded",
+      { orderId: order.id, count: order.files.length },
+      "success"
+    );
+  }
+
   function resetAll() {
     setOrder(null);
     setPhotos(createSamplePhotos());
     setSelectedKey(null);
+    setPreviewView("3d");
     setError(null);
     setCopied(false);
     setExpanded(false);
@@ -316,13 +505,14 @@ export default function Designer() {
   }
 
   if (order) {
-    const photoWord = order.count === 1 ? "photo" : `${order.count} photos`;
+    const photoWord =
+      order.count === 1 ? "edited photo" : `${order.count} edited photos`;
     const helper =
       order.method === "share"
         ? `Your order summary and ${photoWord} were shared. Pick WhatsApp in the share sheet if you have not finished yet, then share your delivery address in the chat.`
         : order.method === "cancelled"
-          ? `The share sheet was closed. Tap below to send your order on WhatsApp, attach your ${photoWord} and share your delivery address in the chat.`
-          : `WhatsApp opened with your order summary. Attach your ${photoWord} and share your delivery address in the chat.`;
+          ? `The share sheet was closed. Tap "Open WhatsApp", attach your ${photoWord} (or download them first) and share your delivery address in the chat.`
+          : `WhatsApp opened with your order summary. Attach your ${photoWord} (or download them first) and share your delivery address in the chat.`;
 
     return (
       <div ref={topRef} className="scroll-mt-24">
@@ -337,7 +527,7 @@ export default function Designer() {
           <ol className="mx-auto mt-4 max-w-xs space-y-1 text-left text-xs text-slate-500">
             {realPhotos.map((photo, index) => (
               <li key={photo.key} className="truncate">
-                {index + 1}. {photo.name}
+                {index + 1}. {photo.name} ({photo.edit.boardColor} board)
               </li>
             ))}
           </ol>
@@ -351,6 +541,16 @@ export default function Designer() {
               <MessageIcon className="h-4 w-4" />
               Open WhatsApp
             </a>
+            {order.files.length > 0 ? (
+              <button
+                type="button"
+                onClick={downloadEditedFiles}
+                className="inline-flex items-center gap-2 rounded-xl border border-slate-200 bg-white px-6 py-3.5 text-sm font-semibold text-slate-700 transition hover:border-ocean-200 hover:text-ocean-700"
+              >
+                <DownloadIcon className="h-4 w-4" />
+                Download edited photos
+              </button>
+            ) : null}
             <button
               type="button"
               onClick={copyOrder}
@@ -364,7 +564,7 @@ export default function Designer() {
               className="inline-flex items-center gap-2 rounded-xl border border-slate-200 bg-white px-6 py-3.5 text-sm font-semibold text-slate-700 transition hover:border-ocean-200 hover:text-ocean-700"
             >
               <PhoneIcon className="h-4 w-4" />
-              Call instead
+              Call
             </a>
           </div>
           <p className="mt-4 text-xs text-slate-500">
@@ -394,65 +594,107 @@ export default function Designer() {
       >
         <div className={expanded ? "w-full max-w-3xl" : "lg:sticky lg:top-24"}>
           <div className="overflow-hidden rounded-3xl border border-slate-200 bg-white shadow-card">
-            <div className="flex items-center justify-between gap-3 border-b border-slate-100 px-5 py-4">
-              <div>
-                <h2 className="text-sm font-bold text-slate-900">
-                  Live 3D preview
-                </h2>
-                <p className="text-xs text-slate-500">
-                  {selected
-                    ? "Drag to rotate, like holding it in your hand"
-                    : "Your magnet will appear here"}
-                </p>
+            <div className="border-b border-slate-100 px-5 py-4">
+              <div className="flex items-center justify-between gap-3">
+                <div>
+                  <h2 className="text-sm font-bold text-slate-900">
+                    Live preview
+                  </h2>
+                  <p className="text-xs text-slate-500">
+                    {!selected
+                      ? "Your magnet will appear here"
+                      : previewView === "edit"
+                        ? "Drag to move the photo, slide to zoom"
+                        : "Drag to rotate, like holding it in your hand"}
+                  </p>
+                </div>
+                <div className="flex items-center gap-2">
+                  <span className="rounded-full bg-ocean-50 px-3 py-1 text-xs font-semibold text-ocean-700">
+                    {count === 0 && hasSamples
+                      ? "Sample preview"
+                      : `${count} ${count === 1 ? "magnet" : "magnets"}`}
+                  </span>
+                  {selected && previewView === "3d" ? (
+                    expanded ? (
+                      <button
+                        type="button"
+                        onClick={() => setExpanded(false)}
+                        aria-label="Close enlarged preview"
+                        className="flex h-9 w-9 items-center justify-center rounded-xl border border-slate-200 text-slate-600 transition hover:bg-slate-100"
+                      >
+                        <CloseIcon className="h-4 w-4" />
+                      </button>
+                    ) : (
+                      <button
+                        type="button"
+                        onClick={() => setExpanded(true)}
+                        aria-label="Enlarge preview"
+                        className="flex h-9 w-9 items-center justify-center rounded-xl border border-slate-200 text-slate-600 transition hover:border-ocean-200 hover:text-ocean-700"
+                      >
+                        <ExpandIcon className="h-4 w-4" />
+                      </button>
+                    )
+                  ) : null}
+                </div>
               </div>
-              <div className="flex items-center gap-2">
-                <span className="rounded-full bg-ocean-50 px-3 py-1 text-xs font-semibold text-ocean-700">
-                  {count === 0 && hasSamples
-                    ? "Sample preview"
-                    : `${count} ${count === 1 ? "magnet" : "magnets"}`}
-                </span>
-                {selected ? (
-                  expanded ? (
-                    <button
-                      type="button"
-                      onClick={() => setExpanded(false)}
-                      aria-label="Close enlarged preview"
-                      className="flex h-9 w-9 items-center justify-center rounded-xl border border-slate-200 text-slate-600 transition hover:bg-slate-100"
-                    >
-                      <CloseIcon className="h-4 w-4" />
-                    </button>
-                  ) : (
-                    <button
-                      type="button"
-                      onClick={() => setExpanded(true)}
-                      aria-label="Enlarge preview"
-                      className="flex h-9 w-9 items-center justify-center rounded-xl border border-slate-200 text-slate-600 transition hover:border-ocean-200 hover:text-ocean-700"
-                    >
-                      <ExpandIcon className="h-4 w-4" />
-                    </button>
-                  )
-                ) : null}
-              </div>
+
+              {selected ? (
+                <div className="mt-3 grid grid-cols-2 gap-1 rounded-xl bg-slate-100 p-1">
+                  <button
+                    type="button"
+                    onClick={() => setPreviewView("3d")}
+                    aria-pressed={previewView === "3d"}
+                    className={tabClasses(previewView === "3d")}
+                  >
+                    <RotateIcon className="h-3.5 w-3.5" />
+                    3D view
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setPreviewView("edit");
+                      setExpanded(false);
+                    }}
+                    aria-pressed={previewView === "edit"}
+                    className={tabClasses(previewView === "edit")}
+                  >
+                    <PencilIcon className="h-3.5 w-3.5" />
+                    Adjust photo
+                  </button>
+                </div>
+              ) : null}
             </div>
 
-            <div
-              className={
-                expanded
-                  ? "relative h-[min(76vh,40rem)] w-full bg-gradient-to-b from-slate-100 via-ocean-50 to-slate-100"
-                  : "relative aspect-square bg-gradient-to-b from-slate-100 via-ocean-50 to-slate-100"
-              }
-            >
-              {selected ? (
-                <>
+            {selected ? (
+              previewView === "edit" ? (
+                <PhotoEditor
+                  photoUrl={selected.url}
+                  aspect={aspectOf(selected)}
+                  edit={selected.edit}
+                  onChange={(next) => updateEdit(selected.key, next)}
+                />
+              ) : (
+                <div
+                  className={
+                    expanded
+                      ? "relative h-[min(76vh,40rem)] w-full bg-gradient-to-b from-slate-100 via-ocean-50 to-slate-100"
+                      : "relative aspect-square bg-gradient-to-b from-slate-100 via-ocean-50 to-slate-100"
+                  }
+                >
                   <div className="absolute inset-0">
-                    <BoardPreview3D photoUrl={selected.url} />
+                    <BoardPreview3D
+                      photoUrl={selected.previewUrl ?? selected.url}
+                      boardColor={selected.edit.boardColor}
+                    />
                   </div>
                   <span className="pointer-events-none absolute bottom-3 left-1/2 flex -translate-x-1/2 items-center gap-1.5 whitespace-nowrap rounded-full bg-slate-900/70 px-3 py-1 text-[11px] font-medium text-white">
                     <RotateIcon className="h-3.5 w-3.5" />
                     Drag to see every side
                   </span>
-                </>
-              ) : (
+                </div>
+              )
+            ) : (
+              <div className="relative aspect-square bg-gradient-to-b from-slate-100 via-ocean-50 to-slate-100">
                 <div className="flex h-full flex-col items-center justify-center gap-3 px-8 text-center">
                   <span className="flex h-16 w-16 items-center justify-center rounded-3xl bg-white text-ocean-400 shadow-sm">
                     <ImageIcon className="h-8 w-8" />
@@ -464,14 +706,14 @@ export default function Designer() {
                     It will appear here as a magnet you can rotate and zoom
                   </p>
                 </div>
-              )}
-            </div>
+              </div>
+            )}
 
             {selected ? (
               <div className="flex items-center justify-between gap-3 border-t border-slate-100 px-5 py-3">
                 <p className="min-w-0 truncate text-xs text-slate-500">
                   {selected.sample ? "Sample design" : selected.name} /{" "}
-                  {selected.width} x {selected.height} px
+                  {selected.edit.boardColor} board
                 </p>
                 <button
                   type="button"
@@ -526,7 +768,7 @@ export default function Designer() {
           onDrop={(event) => {
             event.preventDefault();
             setDragging(false);
-            addFiles(Array.from(event.dataTransfer.files ?? []));
+            handleAddFiles(Array.from(event.dataTransfer.files ?? []));
           }}
           className={`mt-4 flex cursor-pointer flex-col items-center justify-center gap-2 rounded-2xl border-2 border-dashed px-6 text-center transition ${
             count > 0 ? "py-5" : "py-8"
@@ -560,7 +802,7 @@ export default function Designer() {
           disabled={busy || count >= MAX_MAGNETS}
           className="sr-only"
           onChange={(event) => {
-            addFiles(Array.from(event.target.files ?? []));
+            handleAddFiles(Array.from(event.target.files ?? []));
             event.target.value = "";
           }}
         />
@@ -609,7 +851,7 @@ export default function Designer() {
                 <div key={photo.key} className="relative">
                   <button
                     type="button"
-                    onClick={() => setSelectedKey(photo.key)}
+                    onClick={() => selectPhoto(photo.key)}
                     aria-label={
                       photo.sample
                         ? `Preview ${photo.name}`
@@ -623,6 +865,15 @@ export default function Designer() {
                           : "border-white shadow-sm hover:border-ocean-200"
                     }`}
                     style={{ backgroundImage: `url(${photo.url})` }}
+                  />
+                  <span
+                    className="absolute bottom-1 left-1 h-3.5 w-3.5 rounded-full border border-white shadow"
+                    style={{
+                      backgroundColor:
+                        photo.edit.boardColor === "white"
+                          ? "#ffffff"
+                          : "#111827",
+                    }}
                   />
                   <button
                     type="button"
@@ -654,7 +905,8 @@ export default function Designer() {
               ) : null}
             </div>
             <p className="mt-3 text-xs text-slate-500">
-              Tap a photo to preview it in 3D. Each photo becomes one magnet.
+              Tap a photo to preview it, then use &ldquo;Adjust photo&rdquo; to
+              move, zoom or change the board colour.
             </p>
           </div>
         ) : null}
@@ -733,7 +985,7 @@ export default function Designer() {
         >
           <MessageIcon className="h-5 w-5" />
           {sharing
-            ? "Opening share..."
+            ? "Preparing your photos..."
             : count > 0
               ? `Send order on WhatsApp - ${formatINR(price.total)}`
               : "Add a photo to continue"}
@@ -741,8 +993,8 @@ export default function Designer() {
 
         <p className="mt-3 flex items-start justify-center gap-1.5 text-center text-xs text-slate-500">
           <CheckIcon className="mt-0.5 h-3.5 w-3.5 shrink-0 text-emerald-500" />
-          On supported phones your photos are attached automatically in the
-          share sheet. Otherwise, attach them in the chat.
+          Your edited photos are shared automatically on supported phones.
+          Otherwise download them and attach in the chat.
         </p>
       </section>
     </div>
