@@ -9,7 +9,7 @@ export const supabase: SupabaseClient | null =
     : null;
 
 export const PHOTO_BUCKET = "photos";
-export const MAX_LIBRARY_PHOTOS = 50;
+export const MAX_LIBRARY_PHOTOS = 10;
 export const MAX_ORDER_PHOTOS = 10;
 export const RETENTION_DAYS = 3;
 export const SIGNED_URL_SECONDS = 60 * 60;

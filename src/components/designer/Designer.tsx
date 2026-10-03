@@ -126,7 +126,14 @@ export default function Designer() {
     if (!user) return;
     let active = true;
     fetchLibrary(user).then((items) => {
-      if (active) setLibrary(items);
+      if (!active) return;
+      setLibrary(items);
+      setSelectedIds(
+        items
+          .filter((photo) => !photo.printed)
+          .slice(0, MAX_ORDER_PHOTOS)
+          .map((photo) => photo.id)
+      );
     });
     return () => {
       active = false;
@@ -737,8 +744,7 @@ export default function Designer() {
               Add your photos
             </h2>
             <p className="text-xs text-slate-500">
-              Up to {MAX_LIBRARY_PHOTOS} saved, order up to {MAX_ORDER_PHOTOS}
-              at a time.
+              Up to {MAX_LIBRARY_PHOTOS} photos, saved in your account.
             </p>
           </div>
         </div>
