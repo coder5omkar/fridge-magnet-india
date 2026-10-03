@@ -272,7 +272,7 @@ export default function Designer() {
         const info = await preparePhoto(batch[index]);
         const response = await fetch(info.url);
         const blob = await response.blob();
-        const photo = await uploadLibraryPhoto(user, {
+        const result = await uploadLibraryPhoto(user, {
           name: info.name,
           width: info.width,
           height: info.height,
@@ -280,10 +280,14 @@ export default function Designer() {
           orientation: defaultOrientation(info.width / info.height || 1),
           blob,
         });
-        if (photo) {
-          uploaded.push(photo);
+        if (result.photo) {
+          uploaded.push(result.photo);
         } else {
-          setError("One photo could not be uploaded. Please try again.");
+          setError(
+            `Could not upload "${info.name}"${
+              result.error ? ` - ${result.error}` : ""
+            }`
+          );
         }
       } catch (caught) {
         const message =

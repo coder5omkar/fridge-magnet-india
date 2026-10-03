@@ -90,6 +90,11 @@ export async function fetchLibrary(user: User): Promise<LibraryPhoto[]> {
   return rows.map((row) => mapRow(row, urlByPath.get(row.storage_path) ?? ""));
 }
 
+export interface UploadPhotoResult {
+  photo: LibraryPhoto | null;
+  error?: string;
+}
+
 export async function uploadLibraryPhoto(
   user: User,
   input: {
@@ -100,8 +105,8 @@ export async function uploadLibraryPhoto(
     orientation: Orientation;
     blob: Blob;
   }
-): Promise<LibraryPhoto | null> {
-  if (!supabase) return null;
+): Promise<UploadPhotoResult> {
+  if (!supabase) return { photo: null, error: "not configured" };
   const id = createPhotoId();
   const storagePath = `${user.id}/${id}.jpg`;
 
@@ -114,7 +119,7 @@ export async function uploadLibraryPhoto(
 
   if (uploadError) {
     log("photo_upload_failed", { message: uploadError.message }, "error");
-    return null;
+    return { photo: null, error: uploadError.message };
   }
 
   const { data, error } = await supabase
@@ -136,7 +141,7 @@ export async function uploadLibraryPhoto(
   if (error || !data) {
     await supabase.storage.from(PHOTO_BUCKET).remove([storagePath]);
     log("photo_record_failed", { message: error?.message ?? "unknown" }, "error");
-    return null;
+    return { photo: null, error: error?.message ?? "unknown" };
   }
 
   const { data: signed } = await supabase.storage
@@ -148,7 +153,7 @@ export async function uploadLibraryPhoto(
     signed?.signedUrl ?? ""
   );
   log("photo_uploaded", { id: photo.id, name: photo.name }, "success");
-  return photo;
+  return { photo };
 }
 
 export async function updatePhotoOptions(
