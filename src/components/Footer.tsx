@@ -41,16 +41,7 @@ export default function Footer() {
                 Design your magnets
               </Link>
             </li>
-            <li>
-              <Link className="transition hover:text-ocean-700" href="/#how">
-                How it works
-              </Link>
-            </li>
-            <li>
-              <Link className="transition hover:text-ocean-700" href="/#faq">
-                FAQ
-              </Link>
-            </li>
+
           </ul>
         </div>
 

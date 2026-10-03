@@ -8,8 +8,6 @@ import { siteConfig, whatsappLink } from "@/lib/config";
 const links = [
   { href: "/", label: "Home" },
   { href: "/customize", label: "Design your magnets" },
-  { href: "/#how", label: "How it works" },
-  { href: "/#faq", label: "FAQ" },
 ];
 
 export default function Header() {

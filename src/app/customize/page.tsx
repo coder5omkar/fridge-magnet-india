@@ -25,12 +25,6 @@ export default function CustomizePage() {
           <h1 className="text-3xl font-extrabold tracking-tight text-slate-900 sm:text-4xl">
             Create your photo magnets
           </h1>
-          <p className="mt-3 text-base leading-7 text-slate-600">
-            Add one or many photos - each one becomes an 8 x 8 inch magnet.
-            Preview every photo in 3D, then send your order on WhatsApp. No
-            signup and no address forms: delivery details are collected in the
-            chat.
-          </p>
           <p className="mt-3 flex items-center gap-2 text-sm text-slate-500">
             <LockIcon className="h-4 w-4 text-ocean-600" />
             Photos stay on your device until you send them on WhatsApp.
