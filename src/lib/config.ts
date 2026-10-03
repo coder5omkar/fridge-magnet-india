@@ -1,26 +1,21 @@
 export const siteConfig = {
   name: "Fish Magnets India",
-  tagline: "Turn your favourite photo into a premium fish magnet",
+  tagline: "Custom 8 x 8 inch fridge photo magnet",
   description:
-    "Custom 8x8 inch photo magnets printed on premium acrylic or lightweight board. Upload your photo, preview it in 3D, and get it delivered anywhere in India.",
-  whatsappNumber: "919876543210",
-  whatsappDisplay: "+91 98765 43210",
-  email: "orders@fishmagnets.in",
-  instagramHandle: "@fishmagnetsindia",
-  instagramUrl: "https://instagram.com/fishmagnetsindia",
+    "Turn any photo into an 8x8 inch fridge magnet. Upload, preview, and order on WhatsApp. Delivered across India in 2-5 working days.",
+  whatsappNumber: "917083733044",
+  whatsappDisplay: "+91 70837 33044",
+  callNumber: "919082782267",
+  callDisplay: "+91 90827 82267",
   deliveryNote: "Delivered across India in 2-5 working days",
 };
 
 export function whatsappLink(message: string): string {
-  return `https://wa.me/${siteConfig.whatsappNumber}?text=${encodeURIComponent(message)}`;
-}
-
-export function mailtoLink(subject: string, body: string): string {
-  return `mailto:${siteConfig.email}?subject=${encodeURIComponent(
-    subject
-  )}&body=${encodeURIComponent(body)}`;
+  return `https://wa.me/${siteConfig.whatsappNumber}?text=${encodeURIComponent(
+    message
+  )}`;
 }
 
 export function telLink(): string {
-  return `tel:+${siteConfig.whatsappNumber}`;
+  return `tel:+${siteConfig.callNumber}`;
 }

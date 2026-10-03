@@ -23,9 +23,9 @@ export const metadata: Metadata = {
   description: siteConfig.description,
   keywords: [
     "photo magnet",
-    "custom magnet India",
-    "acrylic photo magnet",
-    "8x8 photo print",
+    "custom fridge magnet India",
+    "photo magnet 8x8",
+    "personalised photo gift",
     "personalised gift",
     "fish magnets",
   ],
