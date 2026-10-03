@@ -37,6 +37,13 @@ import {
   type LibraryPhoto,
 } from "@/lib/library";
 import { log } from "@/lib/logger";
+import {
+  buildOrderMessage,
+  createOrderId,
+  downloadFiles,
+  shareOrderFiles,
+  type OrderMethod,
+} from "@/lib/order";
 import { PhotoError, preparePhoto } from "@/lib/photo";
 import { PRODUCT, computePrice, formatINR } from "@/lib/products";
 import { sampleDataUrl } from "@/lib/sampleArt";
@@ -63,8 +70,6 @@ interface DisplayPhoto {
   libraryId?: string;
 }
 
-type OrderMethod = "share" | "whatsapp" | "cancelled";
-
 interface OrderInfo {
   id: string;
   message: string;
@@ -84,23 +89,6 @@ function samplePhotos(): DisplayPhoto[] {
     boardColor: "white",
     sample: true,
   }));
-}
-
-function createOrderId(): string {
-  const random = Math.random().toString(36).slice(2, 6).toUpperCase();
-  const stamp = Date.now().toString(36).slice(-3).toUpperCase();
-  return `FM-${random}${stamp}`;
-}
-
-function canShareFiles(files: File[]): boolean {
-  if (files.length === 0) return false;
-  if (typeof navigator === "undefined") return false;
-  if (typeof navigator.canShare !== "function") return false;
-  try {
-    return navigator.canShare({ files });
-  } catch {
-    return false;
-  }
 }
 
 export default function Designer() {
@@ -337,35 +325,6 @@ export default function Designer() {
     }
   }
 
-  function buildMessage(orderId: string, items: DisplayPhoto[]): string {
-    const lines = [
-      `New order ${orderId} from ${siteConfig.name}`,
-      "",
-      `${PRODUCT.name} x ${items.length}`,
-    ];
-    if (price.discountAmount > 0) {
-      lines.push(
-        `Discount ${price.discountPercent}%: -${formatINR(price.discountAmount)}`
-      );
-    }
-    if (price.shipping > 0) {
-      lines.push(`Shipping: ${formatINR(price.shipping)}`);
-    }
-    lines.push(`Total: ${formatINR(price.total)}`, "", "My photos for printing:");
-    items.forEach((photo, index) => {
-      const dimensions = boardDimensions(photo.orientation);
-      lines.push(
-        `${index + 1}. ${photo.name} (${dimensions.widthIn} x ${dimensions.heightIn} inch, ${photo.orientation}, ${photo.boardColor} board)`
-      );
-    });
-    lines.push(
-      "",
-      "Please fine-tune the crop for printing if needed.",
-      "I will share my delivery address here as well."
-    );
-    return lines.join("\n");
-  }
-
   async function handleOrder() {
     if (count === 0) {
       log("order_blocked_no_photos", {}, "warn");
@@ -373,7 +332,15 @@ export default function Designer() {
     }
     setSharing(true);
     const orderId = createOrderId();
-    const message = buildMessage(orderId, selectedItems);
+    const message = buildOrderMessage(
+      orderId,
+      selectedItems.map((photo) => ({
+        name: photo.name,
+        orientation: photo.orientation,
+        boardColor: photo.boardColor,
+      })),
+      price
+    );
     const libraryPhotos = (library ?? []).filter((photo) =>
       selectedIds.includes(photo.id)
     );
@@ -387,46 +354,13 @@ export default function Designer() {
     );
     const files = fileResults.filter((file): file is File => Boolean(file));
 
-    let method: OrderMethod = "whatsapp";
-    if (canShareFiles(files)) {
-      try {
-        await navigator.share({
-          files,
-          text: message,
-          title: `${siteConfig.name} order ${orderId}`,
-        });
-        method = "share";
-        log(
-          "order_shared",
-          { orderId, magnets: count, photos: files.length },
-          "success"
-        );
-      } catch (caught) {
-        if (caught instanceof DOMException && caught.name === "AbortError") {
-          method = "cancelled";
-          log("order_share_cancelled", { orderId }, "warn");
-        } else {
-          log("order_share_failed", { orderId, message: String(caught) }, "warn");
-        }
-      }
-    }
-    if (method === "whatsapp") {
-      const opened = window.open(
-        whatsappLink(message),
-        "_blank",
-        "noopener,noreferrer"
-      );
-      log(
-        "order_submitted",
-        {
-          orderId,
-          magnets: count,
-          total: price.total,
-          whatsappOpened: opened !== null,
-        },
-        opened ? "success" : "warn"
-      );
-    }
+    const method = await shareOrderFiles(files, message, orderId);
+    log("order_placed", {
+      orderId,
+      magnets: count,
+      total: price.total,
+      method,
+    });
     setSharing(false);
     setExpanded(false);
     setOrder({ id: orderId, message, method, count, files });
@@ -445,23 +379,7 @@ export default function Designer() {
 
   function downloadPhotos() {
     if (!order || order.files.length === 0) return;
-    order.files.forEach((file, index) => {
-      window.setTimeout(() => {
-        const url = URL.createObjectURL(file);
-        const link = document.createElement("a");
-        link.href = url;
-        link.download = file.name;
-        document.body.appendChild(link);
-        link.click();
-        link.remove();
-        window.setTimeout(() => URL.revokeObjectURL(url), 4000);
-      }, index * 350);
-    });
-    log(
-      "photos_downloaded",
-      { orderId: order.id, count: order.files.length },
-      "success"
-    );
+    downloadFiles(order.files, order.id);
   }
 
   function resetAll() {

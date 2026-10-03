@@ -4,24 +4,37 @@ import { useEffect, useState } from "react";
 import dynamic from "next/dynamic";
 import Link from "next/link";
 import {
-  CheckCircleIcon,
+  CheckIcon,
   CloseIcon,
+  DownloadIcon,
   LogOutIcon,
+  MessageIcon,
   RotateIcon,
   TrashIcon,
   UploadIcon,
   UserIcon,
 } from "@/components/icons";
 import { useAuth } from "@/lib/auth";
+import { whatsappLink } from "@/lib/config";
 import { boardDimensions, type BoardColor, type Orientation } from "@/lib/fitting";
 import {
   deleteLibraryPhoto,
   fetchLibrary,
+  fetchPhotoFile,
+  markPhotosPrinted,
   updatePhotoOptions,
   type LibraryPhoto,
 } from "@/lib/library";
 import { log } from "@/lib/logger";
-import { MAX_LIBRARY_PHOTOS, MAX_ORDER_PHOTOS, RETENTION_DAYS } from "@/lib/supabase";
+import {
+  buildOrderMessage,
+  createOrderId,
+  downloadFiles,
+  shareOrderFiles,
+  type OrderMethod,
+} from "@/lib/order";
+import { computePrice, formatINR } from "@/lib/products";
+import { MAX_LIBRARY_PHOTOS, RETENTION_DAYS } from "@/lib/supabase";
 
 const BoardPreview3D = dynamic(
   () => import("@/components/designer/BoardPreview3D"),
@@ -32,6 +45,14 @@ const BoardPreview3D = dynamic(
     ),
   }
 );
+
+interface OrderResult {
+  id: string;
+  message: string;
+  method: OrderMethod;
+  files: File[];
+  count: number;
+}
 
 function segmentClasses(active: boolean): string {
   return `rounded-lg px-3 py-1.5 text-xs font-semibold transition ${
@@ -45,12 +66,23 @@ export default function AccountView() {
   const { user, loading, configured, signInWithGoogle, signOut } = useAuth();
   const [library, setLibrary] = useState<LibraryPhoto[] | null>(null);
   const [previewId, setPreviewId] = useState<string | null>(null);
+  const [selectedIds, setSelectedIds] = useState<string[]>([]);
+  const [ordering, setOrdering] = useState(false);
+  const [orderResult, setOrderResult] = useState<OrderResult | null>(null);
+  const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
     if (!user) return;
     let active = true;
     fetchLibrary(user).then((items) => {
-      if (active) setLibrary(items);
+      if (!active) return;
+      setLibrary(items);
+      setSelectedIds(
+        items
+          .filter((photo) => !photo.printed)
+          .slice(0, MAX_LIBRARY_PHOTOS)
+          .map((photo) => photo.id)
+      );
     });
     return () => {
       active = false;
@@ -76,6 +108,9 @@ export default function AccountView() {
     if (deleted) {
       setLibrary((current) =>
         (current ?? []).filter((item) => item.id !== photo.id)
+      );
+      setSelectedIds((current) =>
+        current.filter((id) => id !== photo.id)
       );
       if (previewId === photo.id) setPreviewId(null);
     }
@@ -104,6 +139,69 @@ export default function AccountView() {
       orientation: nextOrientation,
       boardColor: nextColor,
     });
+  }
+
+  function toggleSelect(photo: LibraryPhoto) {
+    setSelectedIds((current) => {
+      if (current.includes(photo.id)) {
+        return current.filter((id) => id !== photo.id);
+      }
+      if (current.length >= MAX_LIBRARY_PHOTOS) {
+        setError(`You can order up to ${MAX_LIBRARY_PHOTOS} photos at a time.`);
+        return current;
+      }
+      setError(null);
+      return [...current, photo.id];
+    });
+  }
+
+  async function handleOrder() {
+    if (!user || selectedIds.length === 0) return;
+    const photos = library ?? [];
+    const items = photos.filter((photo) => selectedIds.includes(photo.id));
+    if (items.length === 0) return;
+
+    setOrdering(true);
+    setError(null);
+    const orderId = createOrderId();
+    const price = computePrice(items.length);
+    const message = buildOrderMessage(
+      orderId,
+      items.map((photo) => ({
+        name: photo.name,
+        orientation: photo.orientation,
+        boardColor: photo.boardColor,
+      })),
+      price
+    );
+
+    markPhotosPrinted(items.map((photo) => photo.id)).catch(() => {
+      log("photo_print_flag_failed", {}, "warn");
+    });
+    setLibrary((current) =>
+      (current ?? []).map((item) =>
+        items.some((ordered) => ordered.id === item.id)
+          ? { ...item, printed: true }
+          : item
+      )
+    );
+
+    const fileResults = await Promise.all(
+      items.map((photo) => fetchPhotoFile(photo))
+    );
+    const files = fileResults.filter((file): file is File => Boolean(file));
+    const method = await shareOrderFiles(files, message, orderId);
+    log("order_placed", {
+      orderId,
+      magnets: items.length,
+      total: price.total,
+      method,
+      source: "account",
+    });
+
+    setSelectedIds([]);
+    setOrdering(false);
+    setOrderResult({ id: orderId, message, method, files, count: items.length });
   }
 
   if (!configured) {
@@ -154,47 +252,50 @@ export default function AccountView() {
   const photos = library ?? [];
   const loadingLibrary = library === null;
   const previewPhoto = photos.find((photo) => photo.id === previewId) ?? null;
+  const selectedCount = selectedIds.length;
+  const price = computePrice(selectedCount);
 
   return (
     <div className="space-y-6">
-      <div className="flex flex-wrap items-center justify-between gap-4 rounded-3xl border border-slate-200 bg-white p-5 shadow-card sm:p-6">
-        <div className="flex items-center gap-3">
-          <span className="flex h-12 w-12 items-center justify-center rounded-2xl bg-ocean-600 text-lg font-bold text-white">
-            {(name || email).charAt(0).toUpperCase()}
-          </span>
-          <div>
-            <p className="text-base font-bold text-slate-900">
-              {name || "Your account"}
-            </p>
-            <p className="text-sm text-slate-500">{email}</p>
-          </div>
-        </div>
-        <button
-          type="button"
-          onClick={() => signOut()}
-          className="inline-flex items-center gap-2 rounded-xl border border-slate-200 bg-white px-4 py-2.5 text-sm font-semibold text-slate-700 transition hover:border-red-200 hover:text-red-600"
-        >
-          <LogOutIcon className="h-4 w-4" />
-          Sign out
-        </button>
-      </div>
-
-      <div className="flex flex-wrap items-center justify-between gap-3 rounded-2xl border border-ocean-100 bg-ocean-50/70 px-4 py-3">
-        <p className="text-xs font-medium leading-5 text-ocean-900 sm:text-sm">
-          Photos you do not send for print are deleted after {RETENTION_DAYS}{" "}
-          days. Photos sent for print stay in your account.
-        </p>
-        <span className="rounded-full bg-white px-3 py-1 text-xs font-semibold text-ocean-700">
-          {photos.length} of {MAX_LIBRARY_PHOTOS} saved
-        </span>
-      </div>
-
       <div className="rounded-3xl border border-slate-200 bg-white p-5 shadow-card sm:p-6">
         <div className="flex flex-wrap items-center justify-between gap-3">
+          <div className="flex items-center gap-3">
+            <span className="flex h-11 w-11 items-center justify-center rounded-2xl bg-ocean-600 text-base font-bold text-white">
+              {(name || email).charAt(0).toUpperCase()}
+            </span>
+            <div>
+              <p className="text-sm font-bold text-slate-900">
+                {name || "Your account"}
+              </p>
+              <p className="text-xs text-slate-500">{email}</p>
+            </div>
+          </div>
+          <button
+            type="button"
+            onClick={() => signOut()}
+            className="inline-flex items-center gap-1.5 rounded-lg px-2.5 py-1.5 text-xs font-semibold text-slate-500 transition hover:bg-red-50 hover:text-red-600"
+          >
+            <LogOutIcon className="h-3.5 w-3.5" />
+            Sign out
+          </button>
+        </div>
+
+        <div className="mt-4 flex flex-wrap items-center justify-between gap-3 rounded-2xl border border-ocean-100 bg-ocean-50/70 px-4 py-2.5">
+          <p className="text-xs font-medium leading-5 text-ocean-900">
+            Photos not sent for print are deleted after {RETENTION_DAYS} days.
+            Printed photos stay in your account.
+          </p>
+          <span className="rounded-full bg-white px-3 py-1 text-xs font-semibold text-ocean-700">
+            {photos.length} of {MAX_LIBRARY_PHOTOS} saved
+          </span>
+        </div>
+
+        <div className="mt-5 flex flex-wrap items-center justify-between gap-3">
           <div>
             <h2 className="text-base font-bold text-slate-900">Your photos</h2>
             <p className="text-xs text-slate-500">
-              Tap any photo to see its 3D preview and choose the look.
+              Tap a photo for its 3D preview. Tick photos to order them
+              together on WhatsApp.
             </p>
           </div>
           <Link
@@ -202,7 +303,7 @@ export default function AccountView() {
             className="inline-flex items-center gap-2 rounded-xl bg-ocean-600 px-4 py-2.5 text-sm font-semibold text-white shadow-soft transition hover:bg-ocean-700"
           >
             <UploadIcon className="h-4 w-4" />
-            Add & order
+            Add photos
           </Link>
         </div>
 
@@ -232,48 +333,173 @@ export default function AccountView() {
             </Link>
           </div>
         ) : (
-          <div className="mt-4 grid grid-cols-3 gap-3 sm:grid-cols-4 lg:grid-cols-5">
-            {photos.map((photo) => (
-              <div key={photo.id} className="relative">
-                <button
-                  type="button"
-                  onClick={() => setPreviewId(photo.id)}
-                  aria-label={`Preview ${photo.name} in 3D`}
-                  className="relative block aspect-square w-full overflow-hidden rounded-xl border border-slate-200 transition hover:border-ocean-300 hover:shadow-card"
-                >
-                  <span
-                    className="absolute inset-0 bg-cover bg-center"
-                    style={{
-                      backgroundImage: `url("${photo.url}")`,
-                      backgroundColor:
-                        photo.boardColor === "white" ? "#ffffff" : "#111827",
-                    }}
-                  />
-                  {photo.printed ? (
-                    <span className="absolute bottom-1 left-1 flex items-center gap-1 rounded-full bg-emerald-600 px-2 py-0.5 text-[10px] font-semibold text-white">
-                      <CheckCircleIcon className="h-3 w-3" />
-                      Printed
-                    </span>
-                  ) : (
-                    <span className="absolute bottom-1 left-1 rounded-full bg-slate-900/70 px-2 py-0.5 text-[10px] font-semibold text-white">
-                      3D
-                    </span>
-                  )}
-                </button>
-                <p className="mt-1 truncate text-[10px] text-slate-500">
-                  {photo.name}
+          <>
+            <div className="mt-4 flex items-center gap-3 text-xs font-semibold">
+              <button
+                type="button"
+                onClick={() => setSelectedIds(photos.map((photo) => photo.id))}
+                className="text-ocean-700 transition hover:underline"
+              >
+                Select all
+              </button>
+              <button
+                type="button"
+                onClick={() => setSelectedIds([])}
+                className="text-slate-500 transition hover:underline"
+              >
+                Clear
+              </button>
+            </div>
+            <div className="mt-3 grid grid-cols-3 gap-3 sm:grid-cols-4 lg:grid-cols-5">
+              {photos.map((photo) => {
+                const isSelected = selectedIds.includes(photo.id);
+                return (
+                  <div key={photo.id} className="relative">
+                    <button
+                      type="button"
+                      onClick={() => setPreviewId(photo.id)}
+                      aria-label={`Preview ${photo.name} in 3D`}
+                      className={`relative block aspect-square w-full overflow-hidden rounded-xl border-2 transition hover:shadow-card ${
+                        isSelected
+                          ? "border-ocean-500 ring-2 ring-ocean-200"
+                          : "border-slate-200 hover:border-ocean-300"
+                      }`}
+                    >
+                      <span
+                        className="absolute inset-0 bg-cover bg-center"
+                        style={{
+                          backgroundImage: `url("${photo.url}")`,
+                          backgroundColor:
+                            photo.boardColor === "white"
+                              ? "#ffffff"
+                              : "#111827",
+                        }}
+                      />
+                      <span className="absolute bottom-1 left-1 rounded-full bg-slate-900/70 px-2 py-0.5 text-[10px] font-semibold text-white">
+                        {photo.printed ? "Printed" : "3D"}
+                      </span>
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => toggleSelect(photo)}
+                      aria-label={
+                        isSelected
+                          ? `Remove ${photo.name} from this order`
+                          : `Add ${photo.name} to this order`
+                      }
+                      aria-pressed={isSelected}
+                      className={`absolute left-1 top-1 flex h-6 w-6 items-center justify-center rounded-full border shadow transition ${
+                        isSelected
+                          ? "border-ocean-600 bg-ocean-600 text-white"
+                          : "border-slate-300 bg-white/95 text-transparent hover:border-ocean-400"
+                      }`}
+                    >
+                      <CheckIcon className="h-3.5 w-3.5" />
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => handleDelete(photo)}
+                      aria-label={`Delete ${photo.name}`}
+                      className="absolute -right-1.5 -top-1.5 flex h-6 w-6 items-center justify-center rounded-full bg-slate-800 text-white shadow transition hover:bg-red-600"
+                    >
+                      <TrashIcon className="h-3 w-3" />
+                    </button>
+                    <p className="mt-1 truncate text-[10px] text-slate-500">
+                      {photo.boardColor === "white" ? "White" : "Black"} /{" "}
+                      {photo.orientation === "portrait"
+                        ? "Portrait"
+                        : "Landscape"}
+                    </p>
+                  </div>
+                );
+              })}
+            </div>
+
+            <div className="mt-5 rounded-2xl border border-slate-200 bg-slate-50 px-4 py-4">
+              {orderResult ? (
+                <div className="flex flex-wrap items-center justify-between gap-3">
+                  <p className="text-sm font-semibold text-emerald-700">
+                    Order {orderResult.id} ready -{" "}
+                    {orderResult.count === 1
+                      ? "1 magnet"
+                      : `${orderResult.count} magnets`}{" "}
+                    {orderResult.method === "share"
+                      ? "shared."
+                      : "opened in WhatsApp."}
+                  </p>
+                  <div className="flex flex-wrap items-center gap-2">
+                    <a
+                      href={whatsappLink(orderResult.message)}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      className="inline-flex items-center gap-1.5 rounded-lg bg-ocean-600 px-3 py-2 text-xs font-semibold text-white transition hover:bg-ocean-700"
+                    >
+                      <MessageIcon className="h-3.5 w-3.5" />
+                      Open WhatsApp
+                    </a>
+                    {orderResult.files.length > 0 ? (
+                      <button
+                        type="button"
+                        onClick={() =>
+                          downloadFiles(orderResult.files, orderResult.id)
+                        }
+                        className="inline-flex items-center gap-1.5 rounded-lg border border-slate-200 bg-white px-3 py-2 text-xs font-semibold text-slate-700 transition hover:border-ocean-200 hover:text-ocean-700"
+                      >
+                        <DownloadIcon className="h-3.5 w-3.5" />
+                        Download photos
+                      </button>
+                    ) : null}
+                    <button
+                      type="button"
+                      onClick={() => setOrderResult(null)}
+                      className="text-xs font-semibold text-ocean-700 transition hover:underline"
+                    >
+                      New selection
+                    </button>
+                  </div>
+                </div>
+              ) : (
+                <div className="flex flex-wrap items-center justify-between gap-3">
+                  <div>
+                    <p className="text-sm font-bold text-slate-900">
+                      {selectedCount === 0
+                        ? "No photos selected"
+                        : `${selectedCount} of ${photos.length} selected`}
+                    </p>
+                    <p className="text-xs text-slate-500">
+                      {selectedCount === 0
+                        ? "Tick the photos you want printed."
+                        : `Total ${formatINR(price.total)}${
+                            price.shipping === 0
+                              ? " with free shipping"
+                              : ` + ${formatINR(price.shipping)} shipping`
+                          }`}
+                    </p>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={handleOrder}
+                    disabled={selectedCount === 0 || ordering}
+                    className="inline-flex items-center gap-2 rounded-xl bg-ocean-600 px-5 py-3 text-sm font-semibold text-white shadow-soft transition hover:bg-ocean-700 disabled:cursor-not-allowed disabled:bg-slate-300 disabled:shadow-none"
+                  >
+                    <MessageIcon className="h-4 w-4" />
+                    {ordering
+                      ? "Opening share..."
+                      : `Order on WhatsApp${
+                          selectedCount > 0
+                            ? ` - ${formatINR(price.total)}`
+                            : ""
+                        }`}
+                  </button>
+                </div>
+              )}
+              {error ? (
+                <p role="alert" className="mt-3 text-xs font-medium text-red-600">
+                  {error}
                 </p>
-                <button
-                  type="button"
-                  onClick={() => handleDelete(photo)}
-                  aria-label={`Delete ${photo.name}`}
-                  className="absolute -right-1.5 -top-1.5 flex h-6 w-6 items-center justify-center rounded-full bg-slate-800 text-white shadow transition hover:bg-red-600"
-                >
-                  <TrashIcon className="h-3 w-3" />
-                </button>
-              </div>
-            ))}
-          </div>
+              ) : null}
+            </div>
+          </>
         )}
       </div>
 
@@ -350,7 +576,8 @@ export default function AccountView() {
                         : "border-slate-200"
                     }`}
                     style={{
-                      backgroundColor: color === "white" ? "#ffffff" : "#111827",
+                      backgroundColor:
+                        color === "white" ? "#ffffff" : "#111827",
                     }}
                   />
                 ))}
@@ -368,17 +595,20 @@ export default function AccountView() {
               <div className="flex items-center gap-3">
                 <button
                   type="button"
+                  onClick={() => toggleSelect(previewPhoto)}
+                  className="rounded-xl border border-slate-200 bg-white px-4 py-2 text-xs font-semibold text-slate-700 transition hover:border-ocean-200 hover:text-ocean-700"
+                >
+                  {selectedIds.includes(previewPhoto.id)
+                    ? "Remove from order"
+                    : "Add to order"}
+                </button>
+                <button
+                  type="button"
                   onClick={() => handleDelete(previewPhoto)}
                   className="text-xs font-semibold text-red-600 transition hover:underline"
                 >
                   Delete
                 </button>
-                <Link
-                  href="/customize"
-                  className="rounded-xl bg-ocean-600 px-4 py-2 text-xs font-semibold text-white shadow-soft transition hover:bg-ocean-700"
-                >
-                  Order up to {MAX_ORDER_PHOTOS} in one go
-                </Link>
               </div>
             </div>
           </div>
