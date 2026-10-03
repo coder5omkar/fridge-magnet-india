@@ -17,6 +17,9 @@ export default function Footer() {
               {siteConfig.name}
             </span>
           </div>
+          <p className="mt-1 max-w-xs text-xs font-medium text-ocean-700">
+            {siteConfig.tagline}
+          </p>
           <p className="mt-3 max-w-xs text-sm leading-6 text-slate-500">
             Custom 8 x 8 inch photo magnets, printed and delivered anywhere in
             India.

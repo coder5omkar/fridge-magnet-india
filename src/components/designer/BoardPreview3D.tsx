@@ -2,8 +2,14 @@
 
 import { useEffect, useState } from "react";
 import * as THREE from "three";
-import { Canvas } from "@react-three/fiber";
-import { ContactShadows, OrbitControls, RoundedBox } from "@react-three/drei";
+import { Canvas, useThree } from "@react-three/fiber";
+import {
+  ContactShadows,
+  Environment,
+  Lightformer,
+  OrbitControls,
+  RoundedBox,
+} from "@react-three/drei";
 
 interface BoardPreview3DProps {
   photoUrl: string;
@@ -22,21 +28,38 @@ function applyCoverUV(texture: THREE.Texture, aspect: number) {
   texture.needsUpdate = true;
 }
 
+function configureRenderer(gl: THREE.WebGLRenderer) {
+  gl.toneMapping = THREE.ACESFilmicToneMapping;
+  gl.toneMappingExposure = 1.18;
+}
+
+function RendererSettings() {
+  const gl = useThree((state) => state.gl);
+
+  useEffect(() => {
+    configureRenderer(gl);
+  }, [gl]);
+
+  return null;
+}
+
 export default function BoardPreview3D({ photoUrl }: BoardPreview3DProps) {
   const texture = usePhotoTexture(photoUrl);
 
   return (
     <Canvas
-      dpr={[1, 1.5]}
-      camera={{ position: [1.3, 0.8, 4.4], fov: 32 }}
+      dpr={[1, 1.75]}
+      camera={{ position: [1.35, 0.75, 3.9], fov: 35 }}
       gl={{ antialias: true, alpha: true }}
     >
-      <ambientLight intensity={0.7} />
-      <directionalLight position={[4, 6, 6]} intensity={1.05} />
-      <directionalLight position={[-5, -3, -4]} intensity={0.3} />
+      <RendererSettings />
+      <ambientLight intensity={0.9} />
+      <directionalLight position={[4, 6, 6]} intensity={1.4} />
+      <directionalLight position={[-5, -2, 4]} intensity={0.55} />
+      <directionalLight position={[-4, 3, -5]} intensity={0.4} />
       <group>
         <RoundedBox args={[2, 2, 0.09]} radius={0.025} smoothness={4}>
-          <meshStandardMaterial color="#f8fafc" roughness={0.75} />
+          <meshStandardMaterial color="#ffffff" roughness={0.62} />
         </RoundedBox>
         <mesh position={[0, 0, 0.046]}>
           <planeGeometry args={[1.97, 1.97]} />
@@ -44,30 +67,45 @@ export default function BoardPreview3D({ photoUrl }: BoardPreview3DProps) {
         </mesh>
         <mesh position={[0, 0, 0.048]}>
           <planeGeometry args={[1.88, 1.88]} />
-          <meshStandardMaterial map={texture} roughness={0.5} metalness={0} />
+          <meshBasicMaterial map={texture} toneMapped={false} />
         </mesh>
         <mesh position={[0, 0, -0.065]} rotation-x={Math.PI / 2}>
           <cylinderGeometry args={[0.2, 0.2, 0.04, 32]} />
           <meshStandardMaterial color="#334155" roughness={0.55} />
         </mesh>
       </group>
+      <Environment resolution={64}>
+        <Lightformer intensity={1.8} position={[0, 4, 5]} scale={[9, 4, 1]} />
+        <Lightformer
+          intensity={1}
+          rotation-y={Math.PI / 2}
+          position={[-5, 1, 0]}
+          scale={[10, 7, 1]}
+        />
+        <Lightformer
+          intensity={0.8}
+          rotation-y={-Math.PI / 2}
+          position={[5, 1, 0]}
+          scale={[10, 7, 1]}
+        />
+      </Environment>
       <ContactShadows
         position={[0, -1.42, 0]}
-        opacity={0.3}
+        opacity={0.28}
         scale={7}
-        blur={2.6}
+        blur={3}
         far={3}
         color="#0f172a"
       />
       <OrbitControls
         makeDefault
         enablePan={false}
-        minDistance={2.7}
-        maxDistance={7}
+        minDistance={2.4}
+        maxDistance={6.5}
         minPolarAngle={0.35}
         maxPolarAngle={2.15}
         autoRotate
-        autoRotateSpeed={0.8}
+        autoRotateSpeed={0.75}
         enableDamping
         dampingFactor={0.08}
       />

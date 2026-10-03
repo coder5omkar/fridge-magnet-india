@@ -1,8 +1,8 @@
 export const siteConfig = {
-  name: "Fish Magnets India",
-  tagline: "Custom 8 x 8 inch fridge photo magnet",
+  name: "MemoryMagnet",
+  tagline: "Stories that stay forever",
   description:
-    "Turn any photo into an 8x8 inch fridge magnet. Upload, preview, and order on WhatsApp. Delivered across India in 2-5 working days.",
+    "MemoryMagnet turns your photos into 8x8 inch fridge magnets with a matte finish. Upload, preview in 3D, and order on WhatsApp. Delivered across India in 2-5 working days.",
   whatsappNumber: "917083733044",
   whatsappDisplay: "+91 70837 33044",
   callNumber: "919082782267",

@@ -7,6 +7,7 @@ import {
   CheckIcon,
   CloseIcon,
   CopyIcon,
+  ExpandIcon,
   ImageIcon,
   MessageIcon,
   PhoneIcon,
@@ -16,11 +17,7 @@ import {
 } from "@/components/icons";
 import { siteConfig, telLink, whatsappLink } from "@/lib/config";
 import { log } from "@/lib/logger";
-import {
-  PhotoError,
-  preparePhoto,
-  type PhotoInfo,
-} from "@/lib/photo";
+import { PhotoError, preparePhoto, type PhotoInfo } from "@/lib/photo";
 import {
   MAX_MAGNETS,
   PRODUCT,
@@ -28,6 +25,7 @@ import {
   computePrice,
   formatINR,
 } from "@/lib/products";
+import { sampleDataUrl } from "@/lib/sampleArt";
 
 const BoardPreview3D = dynamic(() => import("./BoardPreview3D"), {
   ssr: false,
@@ -38,6 +36,29 @@ const BoardPreview3D = dynamic(() => import("./BoardPreview3D"), {
 
 interface MagnetPhoto extends PhotoInfo {
   key: string;
+  sample?: boolean;
+  file?: File;
+}
+
+type OrderMethod = "share" | "whatsapp" | "cancelled";
+
+interface OrderInfo {
+  id: string;
+  message: string;
+  method: OrderMethod;
+  count: number;
+}
+
+function createSamplePhotos(): MagnetPhoto[] {
+  return (["beach", "sunset", "night"] as const).map((variant, index) => ({
+    key: `sample-${variant}`,
+    url: sampleDataUrl(variant),
+    name: `Sample design ${index + 1}`,
+    width: 256,
+    height: 256,
+    sizeBytes: 0,
+    sample: true,
+  }));
 }
 
 function createOrderId(): string {
@@ -46,17 +67,30 @@ function createOrderId(): string {
   return `FM-${random}${stamp}`;
 }
 
+function canShareFiles(files: File[]): boolean {
+  if (files.length === 0) return false;
+  if (typeof navigator === "undefined") return false;
+  if (typeof navigator.canShare !== "function") return false;
+  try {
+    return navigator.canShare({ files });
+  } catch {
+    return false;
+  }
+}
+
 export default function Designer() {
-  const [photos, setPhotos] = useState<MagnetPhoto[]>([]);
+  const [photos, setPhotos] = useState<MagnetPhoto[]>(() =>
+    createSamplePhotos()
+  );
   const [selectedKey, setSelectedKey] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const [progress, setProgress] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [dragging, setDragging] = useState(false);
-  const [order, setOrder] = useState<{ id: string; message: string } | null>(
-    null
-  );
+  const [order, setOrder] = useState<OrderInfo | null>(null);
   const [copied, setCopied] = useState(false);
+  const [expanded, setExpanded] = useState(false);
+  const [sharing, setSharing] = useState(false);
 
   const fileRef = useRef<HTMLInputElement>(null);
   const previewRef = useRef<HTMLDivElement>(null);
@@ -64,7 +98,9 @@ export default function Designer() {
 
   const selected =
     photos.find((photo) => photo.key === selectedKey) ?? photos[0] ?? null;
-  const count = photos.length;
+  const realPhotos = photos.filter((photo) => !photo.sample);
+  const count = realPhotos.length;
+  const hasSamples = photos.some((photo) => photo.sample);
   const price = computePrice(count);
 
   useEffect(() => {
@@ -73,21 +109,41 @@ export default function Designer() {
     }
   }, [order]);
 
+  useEffect(() => {
+    if (!expanded) return;
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key === "Escape") setExpanded(false);
+    };
+    window.addEventListener("keydown", onKeyDown);
+    const previousOverflow = document.body.style.overflow;
+    document.body.style.overflow = "hidden";
+    return () => {
+      window.removeEventListener("keydown", onKeyDown);
+      document.body.style.overflow = previousOverflow;
+    };
+  }, [expanded]);
+
   async function addFiles(fileList: File[]) {
     if (fileList.length === 0) return;
-    const remaining = MAX_MAGNETS - photos.length;
+    const remaining = MAX_MAGNETS - count;
     if (remaining <= 0) {
       setError(`You can add up to ${MAX_MAGNETS} photos per order.`);
       return;
     }
     const batch = fileList.slice(0, remaining);
     if (fileList.length > remaining) {
-      setError(`Only ${MAX_MAGNETS} photos per order, so we added the first ${remaining}.`);
+      setError(
+        `Only ${MAX_MAGNETS} photos per order, so we added the first ${remaining}.`
+      );
     } else {
       setError(null);
     }
+    const hadSamples = hasSamples;
     setBusy(true);
-    log("photos_selected", { requested: fileList.length, accepted: batch.length });
+    log("photos_selected", {
+      requested: fileList.length,
+      accepted: batch.length,
+    });
 
     const added: MagnetPhoto[] = [];
     for (let index = 0; index < batch.length; index++) {
@@ -101,6 +157,7 @@ export default function Designer() {
         added.push({
           ...info,
           key: `${Date.now()}-${index}-${Math.random().toString(36).slice(2, 7)}`,
+          file: batch[index],
         });
         log(
           "photo_ready",
@@ -120,10 +177,14 @@ export default function Designer() {
     setProgress(null);
     setBusy(false);
     if (added.length > 0) {
-      const firstAdd = photos.length === 0;
-      setPhotos((current) => [...current, ...added]);
+      const firstAdd = count === 0;
+      setPhotos((current) => [
+        ...current.filter((photo) => !photo.sample),
+        ...added,
+      ]);
       setSelectedKey(added[0].key);
       log("photos_added", { count: added.length }, "success");
+      if (hadSamples) log("samples_removed", { reason: "auto" });
       if (firstAdd) {
         requestAnimationFrame(() => {
           previewRef.current?.scrollIntoView({
@@ -135,20 +196,26 @@ export default function Designer() {
     }
   }
 
+  function removeSamples() {
+    setPhotos((current) => current.filter((photo) => !photo.sample));
+    setSelectedKey(null);
+    log("samples_removed", { reason: "manual" });
+  }
+
   function removePhoto(key: string) {
     const next = photos.filter((photo) => photo.key !== key);
     setPhotos(next);
     if (selectedKey === key) {
       setSelectedKey(next[0]?.key ?? null);
     }
-    log("photo_removed", { remaining: next.length });
+    log("photo_removed", { remaining: next.filter((p) => !p.sample).length });
   }
 
-  function buildMessage(orderId: string): string {
+  function buildMessage(orderId: string, items: MagnetPhoto[]): string {
     const lines = [
-      `New order ${orderId} from the website`,
+      `New order ${orderId} from ${siteConfig.name}`,
       "",
-      `${PRODUCT.name} (${SIZE_LABEL}) x ${count}`,
+      `${PRODUCT.name} (${SIZE_LABEL}) x ${items.length}`,
     ];
     if (price.discountAmount > 0) {
       lines.push(
@@ -159,41 +226,72 @@ export default function Designer() {
       lines.push(`Shipping: ${formatINR(price.shipping)}`);
     }
     lines.push(`Total: ${formatINR(price.total)}`, "", "My photos for printing:");
-    photos.forEach((photo, index) => {
+    items.forEach((photo, index) => {
       lines.push(`${index + 1}. ${photo.name}`);
     });
     lines.push(
       "",
-      "I am attaching these photos in this chat.",
+      "I am sharing my photos with this order.",
       "I will share my delivery address here as well."
     );
     return lines.join("\n");
   }
 
-  function handleOrder() {
+  async function handleOrder() {
     if (count === 0) {
       log("order_blocked_no_photos", {}, "warn");
       return;
     }
     const orderId = createOrderId();
-    const message = buildMessage(orderId);
-    const opened = window.open(
-      whatsappLink(message),
-      "_blank",
-      "noopener,noreferrer"
-    );
-    log(
-      "order_submitted",
-      {
-        orderId,
-        magnets: count,
-        total: price.total,
-        shipping: price.shipping,
-        whatsappOpened: opened !== null,
-      },
-      opened ? "success" : "warn"
-    );
-    setOrder({ id: orderId, message });
+    const message = buildMessage(orderId, realPhotos);
+    const files = realPhotos
+      .map((photo) => photo.file)
+      .filter((file): file is File => Boolean(file));
+
+    setSharing(true);
+    let method: OrderMethod = "whatsapp";
+    if (canShareFiles(files)) {
+      try {
+        await navigator.share({
+          files,
+          text: message,
+          title: `${siteConfig.name} order ${orderId}`,
+        });
+        method = "share";
+        log(
+          "order_shared",
+          { orderId, magnets: count, photos: files.length },
+          "success"
+        );
+      } catch (caught) {
+        if (caught instanceof DOMException && caught.name === "AbortError") {
+          method = "cancelled";
+          log("order_share_cancelled", { orderId }, "warn");
+        } else {
+          log("order_share_failed", { orderId, message: String(caught) }, "warn");
+        }
+      }
+    }
+    if (method === "whatsapp") {
+      const opened = window.open(
+        whatsappLink(message),
+        "_blank",
+        "noopener,noreferrer"
+      );
+      log(
+        "order_submitted",
+        {
+          orderId,
+          magnets: count,
+          total: price.total,
+          whatsappOpened: opened !== null,
+        },
+        opened ? "success" : "warn"
+      );
+    }
+    setSharing(false);
+    setExpanded(false);
+    setOrder({ id: orderId, message, method, count });
   }
 
   async function copyOrder() {
@@ -209,14 +307,23 @@ export default function Designer() {
 
   function resetAll() {
     setOrder(null);
-    setPhotos([]);
+    setPhotos(createSamplePhotos());
     setSelectedKey(null);
     setError(null);
     setCopied(false);
+    setExpanded(false);
     log("order_restarted");
   }
 
   if (order) {
+    const photoWord = order.count === 1 ? "photo" : `${order.count} photos`;
+    const helper =
+      order.method === "share"
+        ? `Your order summary and ${photoWord} were shared. Pick WhatsApp in the share sheet if you have not finished yet, then share your delivery address in the chat.`
+        : order.method === "cancelled"
+          ? `The share sheet was closed. Tap below to send your order on WhatsApp, attach your ${photoWord} and share your delivery address in the chat.`
+          : `WhatsApp opened with your order summary. Attach your ${photoWord} and share your delivery address in the chat.`;
+
     return (
       <div ref={topRef} className="scroll-mt-24">
         <div className="mx-auto max-w-xl rounded-3xl border border-emerald-100 bg-white p-6 text-center shadow-card sm:p-8">
@@ -225,12 +332,10 @@ export default function Designer() {
             Order {order.id} is ready
           </h2>
           <p className="mx-auto mt-3 max-w-md text-sm leading-6 text-slate-600">
-            WhatsApp opened with your order summary. Attach your{" "}
-            {count === 1 ? "photo" : `${count} photos`} and share your delivery
-            address in the chat. We confirm and send the payment link.
+            {helper}
           </p>
           <ol className="mx-auto mt-4 max-w-xs space-y-1 text-left text-xs text-slate-500">
-            {photos.map((photo, index) => (
+            {realPhotos.map((photo, index) => (
               <li key={photo.key} className="truncate">
                 {index + 1}. {photo.name}
               </li>
@@ -244,7 +349,7 @@ export default function Designer() {
               className="inline-flex items-center gap-2 rounded-xl bg-ocean-600 px-6 py-3.5 text-sm font-semibold text-white shadow-soft transition hover:bg-ocean-700"
             >
               <MessageIcon className="h-4 w-4" />
-              Open WhatsApp again
+              Open WhatsApp
             </a>
             <button
               type="button"
@@ -263,8 +368,7 @@ export default function Designer() {
             </a>
           </div>
           <p className="mt-4 text-xs text-slate-500">
-            WhatsApp did not open? Allow pop-ups and use &ldquo;Open WhatsApp
-            again&rdquo;, or call {siteConfig.callDisplay}.
+            Need help? Call {siteConfig.callDisplay}.
           </p>
           <button
             type="button"
@@ -279,12 +383,16 @@ export default function Designer() {
   }
 
   return (
-    <div className="mt-8 grid items-start gap-8 lg:grid-cols-[1.05fr_1fr] lg:gap-10">
+    <div className="mt-8 grid items-start gap-8 lg:grid-cols-[1.3fr_1fr] lg:gap-10">
       <div
         ref={previewRef}
-        className="order-2 scroll-mt-24 lg:order-1 lg:row-span-2"
+        className={
+          expanded
+            ? "fixed inset-0 z-50 flex items-center justify-center overflow-y-auto bg-slate-950/95 p-3 sm:p-8"
+            : "order-2 scroll-mt-24 lg:order-1 lg:row-span-2"
+        }
       >
-        <div className="lg:sticky lg:top-24">
+        <div className={expanded ? "w-full max-w-3xl" : "lg:sticky lg:top-24"}>
           <div className="overflow-hidden rounded-3xl border border-slate-200 bg-white shadow-card">
             <div className="flex items-center justify-between gap-3 border-b border-slate-100 px-5 py-4">
               <div>
@@ -297,12 +405,43 @@ export default function Designer() {
                     : "Your magnet will appear here"}
                 </p>
               </div>
-              <span className="rounded-full bg-ocean-50 px-3 py-1 text-xs font-semibold text-ocean-700">
-                {count} {count === 1 ? "magnet" : "magnets"}
-              </span>
+              <div className="flex items-center gap-2">
+                <span className="rounded-full bg-ocean-50 px-3 py-1 text-xs font-semibold text-ocean-700">
+                  {count === 0 && hasSamples
+                    ? "Sample preview"
+                    : `${count} ${count === 1 ? "magnet" : "magnets"}`}
+                </span>
+                {selected ? (
+                  expanded ? (
+                    <button
+                      type="button"
+                      onClick={() => setExpanded(false)}
+                      aria-label="Close enlarged preview"
+                      className="flex h-9 w-9 items-center justify-center rounded-xl border border-slate-200 text-slate-600 transition hover:bg-slate-100"
+                    >
+                      <CloseIcon className="h-4 w-4" />
+                    </button>
+                  ) : (
+                    <button
+                      type="button"
+                      onClick={() => setExpanded(true)}
+                      aria-label="Enlarge preview"
+                      className="flex h-9 w-9 items-center justify-center rounded-xl border border-slate-200 text-slate-600 transition hover:border-ocean-200 hover:text-ocean-700"
+                    >
+                      <ExpandIcon className="h-4 w-4" />
+                    </button>
+                  )
+                ) : null}
+              </div>
             </div>
 
-            <div className="relative aspect-square bg-gradient-to-b from-slate-100 via-ocean-50 to-slate-100">
+            <div
+              className={
+                expanded
+                  ? "relative h-[min(76vh,40rem)] w-full bg-gradient-to-b from-slate-100 via-ocean-50 to-slate-100"
+                  : "relative aspect-square bg-gradient-to-b from-slate-100 via-ocean-50 to-slate-100"
+              }
+            >
               {selected ? (
                 <>
                   <div className="absolute inset-0">
@@ -331,7 +470,8 @@ export default function Designer() {
             {selected ? (
               <div className="flex items-center justify-between gap-3 border-t border-slate-100 px-5 py-3">
                 <p className="min-w-0 truncate text-xs text-slate-500">
-                  {selected.name} / {selected.width} x {selected.height} px
+                  {selected.sample ? "Sample design" : selected.name} /{" "}
+                  {selected.width} x {selected.height} px
                 </p>
                 <button
                   type="button"
@@ -344,9 +484,11 @@ export default function Designer() {
             ) : null}
           </div>
 
-          <p className="mt-3 px-2 text-center text-xs text-slate-500">
-            Photos stay on your device until you send them on WhatsApp.
-          </p>
+          {!expanded ? (
+            <p className="mt-3 px-2 text-center text-xs text-slate-500">
+              Photos stay on your device until you send them on WhatsApp.
+            </p>
+          ) : null}
         </div>
       </div>
 
@@ -423,12 +565,43 @@ export default function Designer() {
           }}
         />
 
-        {count > 0 ? (
+        {hasSamples ? (
+          <div className="mt-4 rounded-2xl border border-amber-100 bg-amber-50 px-4 py-3">
+            <p className="text-xs font-medium leading-5 text-amber-800">
+              These sample designs are for preview only. Add your own photos
+              and the samples disappear automatically.
+            </p>
+            <div className="mt-2 flex flex-wrap gap-2">
+              <button
+                type="button"
+                onClick={() => fileRef.current?.click()}
+                className="rounded-lg bg-ocean-600 px-3 py-1.5 text-xs font-semibold text-white transition hover:bg-ocean-700"
+              >
+                Add my photos
+              </button>
+              <button
+                type="button"
+                onClick={removeSamples}
+                className="rounded-lg border border-amber-200 bg-white px-3 py-1.5 text-xs font-semibold text-amber-800 transition hover:bg-amber-100"
+              >
+                Remove samples
+              </button>
+            </div>
+          </div>
+        ) : null}
+
+        {photos.length > 0 ? (
           <div className="mt-6">
             <p className="flex items-center gap-2 text-sm font-bold text-slate-800">
               Your magnets
-              <span className="rounded-full bg-emerald-50 px-2 py-0.5 text-xs font-semibold text-emerald-700">
-                {count} of {MAX_MAGNETS}
+              <span
+                className={`rounded-full px-2 py-0.5 text-xs font-semibold ${
+                  hasSamples
+                    ? "bg-amber-50 text-amber-700"
+                    : "bg-emerald-50 text-emerald-700"
+                }`}
+              >
+                {hasSamples ? "Sample preview" : `${count} of ${MAX_MAGNETS}`}
               </span>
             </p>
             <div className="mt-3 grid grid-cols-4 gap-3 sm:grid-cols-5">
@@ -437,11 +610,17 @@ export default function Designer() {
                   <button
                     type="button"
                     onClick={() => setSelectedKey(photo.key)}
-                    aria-label={`Preview photo ${index + 1}: ${photo.name}`}
+                    aria-label={
+                      photo.sample
+                        ? `Preview ${photo.name}`
+                        : `Preview photo ${index + 1}: ${photo.name}`
+                    }
                     className={`block aspect-square w-full rounded-xl border-2 bg-cover bg-center transition ${
                       selected?.key === photo.key
                         ? "border-ocean-500 ring-2 ring-ocean-200"
-                        : "border-white shadow-sm hover:border-ocean-200"
+                        : photo.sample
+                          ? "border-dashed border-amber-300 shadow-sm hover:border-amber-400"
+                          : "border-white shadow-sm hover:border-ocean-200"
                     }`}
                     style={{ backgroundImage: `url(${photo.url})` }}
                   />
@@ -453,8 +632,12 @@ export default function Designer() {
                   >
                     <CloseIcon className="h-3 w-3" />
                   </button>
-                  <span className="mt-1 block text-center text-[10px] font-medium text-slate-400">
-                    {index + 1}
+                  <span
+                    className={`mt-1 block text-center text-[10px] font-medium ${
+                      photo.sample ? "text-amber-600" : "text-slate-400"
+                    }`}
+                  >
+                    {photo.sample ? "Sample" : index + 1}
                   </span>
                 </div>
               ))}
@@ -471,7 +654,7 @@ export default function Designer() {
               ) : null}
             </div>
             <p className="mt-3 text-xs text-slate-500">
-              Tap a photo to preview it. Each photo becomes one guided magnet.
+              Tap a photo to preview it in 3D. Each photo becomes one magnet.
             </p>
           </div>
         ) : null}
@@ -545,19 +728,21 @@ export default function Designer() {
         <button
           type="button"
           onClick={handleOrder}
-          disabled={count === 0}
+          disabled={count === 0 || sharing}
           className="mt-5 flex w-full items-center justify-center gap-2 rounded-xl bg-ocean-600 px-6 py-4 text-base font-semibold text-white shadow-soft transition hover:bg-ocean-700 disabled:cursor-not-allowed disabled:bg-slate-300 disabled:shadow-none"
         >
           <MessageIcon className="h-5 w-5" />
-          {count > 0
-            ? `Send order on WhatsApp - ${formatINR(price.total)}`
-            : "Add a photo to continue"}
+          {sharing
+            ? "Opening share..."
+            : count > 0
+              ? `Send order on WhatsApp - ${formatINR(price.total)}`
+              : "Add a photo to continue"}
         </button>
 
         <p className="mt-3 flex items-start justify-center gap-1.5 text-center text-xs text-slate-500">
           <CheckIcon className="mt-0.5 h-3.5 w-3.5 shrink-0 text-emerald-500" />
-          Opens WhatsApp with your order summary. Attach your photos and share
-          your delivery address there.
+          On supported phones your photos are attached automatically in the
+          share sheet. Otherwise, attach them in the chat.
         </p>
       </section>
     </div>

@@ -31,7 +31,7 @@ export default function Header() {
               {siteConfig.name}
             </span>
             <span className="hidden text-xs text-slate-500 sm:block">
-              8 x 8 inch photo magnets
+              {siteConfig.tagline}
             </span>
           </span>
         </Link>

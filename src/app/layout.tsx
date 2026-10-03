@@ -19,7 +19,7 @@ const geistMono = Geist_Mono({
 
 export const metadata: Metadata = {
   title: {
-    default: `${siteConfig.name} | Custom Photo Magnets, Made in India`,
+    default: `${siteConfig.name} - ${siteConfig.tagline}`,
     template: `%s | ${siteConfig.name}`,
   },
   description: siteConfig.description,
@@ -28,11 +28,10 @@ export const metadata: Metadata = {
     "custom fridge magnet India",
     "photo magnet 8x8",
     "personalised photo gift",
-    "personalised gift",
-    "fish magnets",
+    "MemoryMagnet",
   ],
   openGraph: {
-    title: siteConfig.name,
+    title: `${siteConfig.name} - ${siteConfig.tagline}`,
     description: siteConfig.description,
     type: "website",
     locale: "en_IN",
