@@ -4,6 +4,7 @@ import ActivityLogger from "@/components/ActivityLogger";
 import DebugPanel from "@/components/DebugPanel";
 import Header from "@/components/Header";
 import Footer from "@/components/Footer";
+import { AuthProvider } from "@/lib/auth";
 import { siteConfig } from "@/lib/config";
 import "./globals.css";
 
@@ -46,11 +47,13 @@ export default function RootLayout({ children }: LayoutProps<"/">) {
       className={`${geistSans.variable} ${geistMono.variable} h-full antialiased`}
     >
       <body className="flex min-h-full flex-col bg-slate-50 text-slate-800">
-        <ActivityLogger />
-        <Header />
-        <main className="flex-1">{children}</main>
-        <Footer />
-        <DebugPanel />
+        <AuthProvider>
+          <ActivityLogger />
+          <Header />
+          <main className="flex-1">{children}</main>
+          <Footer />
+          <DebugPanel />
+        </AuthProvider>
       </body>
     </html>
   );

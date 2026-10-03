@@ -2,6 +2,7 @@
 
 import { useEffect, useRef, useState } from "react";
 import dynamic from "next/dynamic";
+import Link from "next/link";
 import {
   CheckCircleIcon,
   CheckIcon,
@@ -14,19 +15,36 @@ import {
   PhoneIcon,
   PlusIcon,
   RotateIcon,
+  TrashIcon,
   UploadIcon,
+  UserIcon,
 } from "@/components/icons";
+import { useAuth } from "@/lib/auth";
 import { siteConfig, telLink, whatsappLink } from "@/lib/config";
-import { boardDimensions, defaultEdit, type PhotoEdit } from "@/lib/fitting";
-import { log } from "@/lib/logger";
-import { PhotoError, preparePhoto, type PhotoInfo } from "@/lib/photo";
 import {
-  MAX_MAGNETS,
-  PRODUCT,
-  computePrice,
-  formatINR,
-} from "@/lib/products";
+  boardDimensions,
+  defaultOrientation,
+  type BoardColor,
+  type Orientation,
+} from "@/lib/fitting";
+import {
+  deleteLibraryPhoto,
+  fetchLibrary,
+  fetchPhotoFile,
+  markPhotosPrinted,
+  updatePhotoOptions,
+  uploadLibraryPhoto,
+  type LibraryPhoto,
+} from "@/lib/library";
+import { log } from "@/lib/logger";
+import { PhotoError, preparePhoto } from "@/lib/photo";
+import { PRODUCT, computePrice, formatINR } from "@/lib/products";
 import { sampleDataUrl } from "@/lib/sampleArt";
+import {
+  MAX_LIBRARY_PHOTOS,
+  MAX_ORDER_PHOTOS,
+  RETENTION_DAYS,
+} from "@/lib/supabase";
 
 const BoardPreview3D = dynamic(() => import("./BoardPreview3D"), {
   ssr: false,
@@ -35,11 +53,14 @@ const BoardPreview3D = dynamic(() => import("./BoardPreview3D"), {
   ),
 });
 
-interface MagnetPhoto extends PhotoInfo {
+interface DisplayPhoto {
   key: string;
-  sample?: boolean;
-  file?: File;
-  edit: PhotoEdit;
+  url: string;
+  name: string;
+  orientation: Orientation;
+  boardColor: BoardColor;
+  sample: boolean;
+  libraryId?: string;
 }
 
 type OrderMethod = "share" | "whatsapp" | "cancelled";
@@ -52,28 +73,16 @@ interface OrderInfo {
   files: File[];
 }
 
-function aspectOf(photo: PhotoInfo): number {
-  return photo.width / photo.height || 1;
-}
+const sampleVariants = ["beach", "sunset", "night"] as const;
 
-function segmentClasses(active: boolean): string {
-  return `rounded-lg px-3 py-1.5 text-xs font-semibold transition ${
-    active
-      ? "bg-white text-ocean-700 shadow-sm"
-      : "text-slate-500 hover:text-slate-700"
-  }`;
-}
-
-function createSamplePhotos(): MagnetPhoto[] {
-  return (["beach", "sunset", "night"] as const).map((variant, index) => ({
+function samplePhotos(): DisplayPhoto[] {
+  return sampleVariants.map((variant, index) => ({
     key: `sample-${variant}`,
     url: sampleDataUrl(variant),
     name: `Sample design ${index + 1}`,
-    width: 256,
-    height: 256,
-    sizeBytes: 0,
+    orientation: "landscape",
+    boardColor: "white",
     sample: true,
-    edit: defaultEdit(1),
   }));
 }
 
@@ -81,11 +90,6 @@ function createOrderId(): string {
   const random = Math.random().toString(36).slice(2, 6).toUpperCase();
   const stamp = Date.now().toString(36).slice(-3).toUpperCase();
   return `FM-${random}${stamp}`;
-}
-
-function createPhotoKey(index: number): string {
-  const random = Math.random().toString(36).slice(2, 7);
-  return `${Date.now().toString(36)}-${index}-${random}`;
 }
 
 function canShareFiles(files: File[]): boolean {
@@ -100,10 +104,11 @@ function canShareFiles(files: File[]): boolean {
 }
 
 export default function Designer() {
-  const [photos, setPhotos] = useState<MagnetPhoto[]>(() =>
-    createSamplePhotos()
-  );
+  const { user, loading: authLoading, configured, signInWithGoogle } = useAuth();
+  const [library, setLibrary] = useState<LibraryPhoto[] | null>(null);
+  const [selectedIds, setSelectedIds] = useState<string[]>([]);
   const [selectedKey, setSelectedKey] = useState<string | null>(null);
+  const [samplesDismissed, setSamplesDismissed] = useState(false);
   const [busy, setBusy] = useState(false);
   const [progress, setProgress] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -117,15 +122,16 @@ export default function Designer() {
   const previewRef = useRef<HTMLDivElement>(null);
   const topRef = useRef<HTMLDivElement>(null);
 
-  const selected =
-    photos.find((photo) => photo.key === selectedKey) ?? photos[0] ?? null;
-  const realPhotos = photos.filter((photo) => !photo.sample);
-  const count = realPhotos.length;
-  const hasSamples = photos.some((photo) => photo.sample);
-  const price = computePrice(count);
-  const selectedDimensions = selected
-    ? boardDimensions(selected.edit.orientation)
-    : null;
+  useEffect(() => {
+    if (!user) return;
+    let active = true;
+    fetchLibrary(user).then((items) => {
+      if (active) setLibrary(items);
+    });
+    return () => {
+      active = false;
+    };
+  }, [user]);
 
   useEffect(() => {
     if (order) {
@@ -147,63 +153,131 @@ export default function Designer() {
     };
   }, [expanded]);
 
-  function updateEdit(key: string, edit: PhotoEdit) {
-    setPhotos((current) =>
-      current.map((item) => (item.key === key ? { ...item, edit } : item))
+  const showSamples =
+    !user || (library !== null && library.length === 0 && !samplesDismissed);
+
+  const displayPhotos: DisplayPhoto[] = showSamples
+    ? samplePhotos()
+    : (library ?? []).map((photo) => ({
+        key: photo.id,
+        url: photo.url,
+        name: photo.name,
+        orientation: photo.orientation,
+        boardColor: photo.boardColor,
+        sample: false,
+        libraryId: photo.id,
+      }));
+
+  const selectedItems = displayPhotos.filter((photo) =>
+    selectedIds.includes(photo.key)
+  );
+  const count = selectedItems.length;
+  const price = computePrice(count);
+  const selected =
+    displayPhotos.find((photo) => photo.key === selectedKey) ??
+    selectedItems[0] ??
+    displayPhotos[0] ??
+    null;
+  const selectedDimensions = selected
+    ? boardDimensions(selected.orientation)
+    : null;
+  const libraryCount = library?.length ?? 0;
+
+  function updateLocalLibrary(id: string, patch: Partial<LibraryPhoto>) {
+    setLibrary((current) =>
+      (current ?? []).map((item) =>
+        item.id === id ? { ...item, ...patch } : item
+      )
     );
+  }
+
+  function handleOptionsChange(
+    photo: DisplayPhoto,
+    patch: { orientation?: Orientation; boardColor?: BoardColor }
+  ) {
+    if (!photo.libraryId) return;
+    const nextOrientation = patch.orientation ?? photo.orientation;
+    const nextColor = patch.boardColor ?? photo.boardColor;
+    updateLocalLibrary(photo.libraryId, {
+      orientation: nextOrientation,
+      boardColor: nextColor,
+    });
+    updatePhotoOptions(photo.libraryId, nextOrientation, nextColor);
     log("photo_options_changed", {
-      key,
-      orientation: edit.orientation,
-      boardColor: edit.boardColor,
+      id: photo.libraryId,
+      orientation: nextOrientation,
+      boardColor: nextColor,
     });
   }
 
-  function selectPhoto(key: string) {
-    setSelectedKey(key);
+  function toggleSelect(photo: DisplayPhoto) {
+    if (!photo.libraryId) return;
+    setSelectedIds((current) => {
+      if (current.includes(photo.key)) {
+        return current.filter((key) => key !== photo.key);
+      }
+      if (current.length >= MAX_ORDER_PHOTOS) {
+        setError(
+          `You can order up to ${MAX_ORDER_PHOTOS} magnets at a time. Remove one to add another.`
+        );
+        return current;
+      }
+      setError(null);
+      return [...current, photo.key];
+    });
   }
 
   async function handleAddFiles(fileList: File[]) {
     if (fileList.length === 0) return;
-    const remaining = MAX_MAGNETS - count;
+    if (!configured || !user) {
+      setError("Please sign in with Google to add photos.");
+      return;
+    }
+    const remaining = MAX_LIBRARY_PHOTOS - libraryCount;
     if (remaining <= 0) {
-      setError(`You can add up to ${MAX_MAGNETS} photos per order.`);
+      setError(
+        `Your library is full (${MAX_LIBRARY_PHOTOS} photos). Delete a few to add more.`
+      );
       return;
     }
     const batch = fileList.slice(0, remaining);
     if (fileList.length > remaining) {
       setError(
-        `Only ${MAX_MAGNETS} photos per order, so we added the first ${remaining}.`
+        `Your library allows ${MAX_LIBRARY_PHOTOS} photos, so we added the first ${remaining}.`
       );
     } else {
       setError(null);
     }
-    const hadSamples = hasSamples;
     setBusy(true);
     log("photos_selected", {
       requested: fileList.length,
       accepted: batch.length,
     });
 
-    const added: MagnetPhoto[] = [];
+    const uploaded: LibraryPhoto[] = [];
     for (let index = 0; index < batch.length; index++) {
       setProgress(
         batch.length > 1
-          ? `Adding photo ${index + 1} of ${batch.length}...`
-          : "Adding your photo..."
+          ? `Uploading photo ${index + 1} of ${batch.length}...`
+          : "Uploading your photo..."
       );
       try {
         const info = await preparePhoto(batch[index]);
-        added.push({
-          ...info,
-          key: createPhotoKey(index),
-          file: batch[index],
-          edit: defaultEdit(aspectOf(info)),
+        const response = await fetch(info.url);
+        const blob = await response.blob();
+        const photo = await uploadLibraryPhoto(user, {
+          name: info.name,
+          width: info.width,
+          height: info.height,
+          sizeBytes: info.sizeBytes,
+          orientation: defaultOrientation(info.width / info.height || 1),
+          blob,
         });
-        log(
-          "photo_ready",
-          { name: info.name, width: info.width, height: info.height },
-          "success"
-        );
+        if (photo) {
+          uploaded.push(photo);
+        } else {
+          setError("One photo could not be uploaded. Please try again.");
+        }
       } catch (caught) {
         const message =
           caught instanceof PhotoError
@@ -216,42 +290,43 @@ export default function Designer() {
 
     setProgress(null);
     setBusy(false);
-    if (added.length > 0) {
-      const firstAdd = count === 0;
-      setPhotos((current) => [
-        ...current.filter((photo) => !photo.sample),
-        ...added,
-      ]);
-      setSelectedKey(added[0].key);
-      log("photos_added", { count: added.length }, "success");
-      if (hadSamples) log("samples_removed", { reason: "auto" });
-      if (firstAdd) {
-        requestAnimationFrame(() => {
-          previewRef.current?.scrollIntoView({
-            behavior: "smooth",
-            block: "center",
-          });
+    if (uploaded.length > 0) {
+      setLibrary((current) => [...uploaded, ...(current ?? [])]);
+      setSamplesDismissed(true);
+      setSelectedIds((current) =>
+        [...current, ...uploaded.map((photo) => photo.id)].slice(
+          0,
+          MAX_ORDER_PHOTOS
+        )
+      );
+      setSelectedKey(uploaded[0].id);
+      log("photos_added", { count: uploaded.length }, "success");
+      requestAnimationFrame(() => {
+        previewRef.current?.scrollIntoView({
+          behavior: "smooth",
+          block: "center",
         });
-      }
+      });
     }
   }
 
-  function removeSamples() {
-    setPhotos((current) => current.filter((photo) => !photo.sample));
-    setSelectedKey(null);
-    log("samples_removed", { reason: "manual" });
-  }
-
-  function removePhoto(key: string) {
-    const next = photos.filter((photo) => photo.key !== key);
-    setPhotos(next);
-    if (selectedKey === key) {
-      setSelectedKey(next[0]?.key ?? null);
+  async function handleDelete(photo: DisplayPhoto) {
+    if (!photo.libraryId) return;
+    const target = (library ?? []).find((item) => item.id === photo.libraryId);
+    if (!target) return;
+    const deleted = await deleteLibraryPhoto(target);
+    if (deleted) {
+      setLibrary((current) =>
+        (current ?? []).filter((item) => item.id !== photo.libraryId)
+      );
+      setSelectedIds((current) =>
+        current.filter((key) => key !== photo.libraryId)
+      );
+      if (selectedKey === photo.key) setSelectedKey(null);
     }
-    log("photo_removed", { remaining: next.filter((p) => !p.sample).length });
   }
 
-  function buildMessage(orderId: string, items: MagnetPhoto[]): string {
+  function buildMessage(orderId: string, items: DisplayPhoto[]): string {
     const lines = [
       `New order ${orderId} from ${siteConfig.name}`,
       "",
@@ -267,9 +342,9 @@ export default function Designer() {
     }
     lines.push(`Total: ${formatINR(price.total)}`, "", "My photos for printing:");
     items.forEach((photo, index) => {
-      const dimensions = boardDimensions(photo.edit.orientation);
+      const dimensions = boardDimensions(photo.orientation);
       lines.push(
-        `${index + 1}. ${photo.name} (${dimensions.widthIn} x ${dimensions.heightIn} inch, ${photo.edit.orientation}, ${photo.edit.boardColor} board)`
+        `${index + 1}. ${photo.name} (${dimensions.widthIn} x ${dimensions.heightIn} inch, ${photo.orientation}, ${photo.boardColor} board)`
       );
     });
     lines.push(
@@ -287,10 +362,19 @@ export default function Designer() {
     }
     setSharing(true);
     const orderId = createOrderId();
-    const message = buildMessage(orderId, realPhotos);
-    const files = realPhotos
-      .map((photo) => photo.file)
-      .filter((file): file is File => Boolean(file));
+    const message = buildMessage(orderId, selectedItems);
+    const libraryPhotos = (library ?? []).filter((photo) =>
+      selectedIds.includes(photo.id)
+    );
+
+    markPhotosPrinted(libraryPhotos.map((photo) => photo.id)).catch(() => {
+      log("photo_print_flag_failed", {}, "warn");
+    });
+
+    const fileResults = await Promise.all(
+      libraryPhotos.map((photo) => fetchPhotoFile(photo))
+    );
+    const files = fileResults.filter((file): file is File => Boolean(file));
 
     let method: OrderMethod = "whatsapp";
     if (canShareFiles(files)) {
@@ -371,7 +455,7 @@ export default function Designer() {
 
   function resetAll() {
     setOrder(null);
-    setPhotos(createSamplePhotos());
+    setSelectedIds([]);
     setSelectedKey(null);
     setError(null);
     setCopied(false);
@@ -399,17 +483,20 @@ export default function Designer() {
             {helper}
           </p>
           <ol className="mx-auto mt-4 max-w-xs space-y-1 text-left text-xs text-slate-500">
-            {realPhotos.map((photo, index) => {
-              const dimensions = boardDimensions(photo.edit.orientation);
+            {selectedItems.map((photo, index) => {
+              const dimensions = boardDimensions(photo.orientation);
               return (
                 <li key={photo.key} className="truncate">
                   {index + 1}. {photo.name} ({dimensions.widthIn} x{" "}
-                  {dimensions.heightIn} inch, {photo.edit.orientation},{" "}
-                  {photo.edit.boardColor} board)
+                  {dimensions.heightIn} inch, {photo.orientation},{" "}
+                  {photo.boardColor} board)
                 </li>
               );
             })}
           </ol>
+          <p className="mt-3 text-xs text-slate-500">
+            These photos are marked as printed and stay in your account.
+          </p>
           <div className="mt-6 flex flex-wrap items-center justify-center gap-3">
             <a
               href={whatsappLink(order.message)}
@@ -461,6 +548,8 @@ export default function Designer() {
     );
   }
 
+  const libraryLoading = user !== null && library === null;
+
   return (
     <div className="mt-8 grid items-start gap-8 lg:grid-cols-[1.3fr_1fr] lg:gap-10">
       <div
@@ -486,9 +575,9 @@ export default function Designer() {
               </div>
               <div className="flex items-center gap-2">
                 <span className="rounded-full bg-ocean-50 px-3 py-1 text-xs font-semibold text-ocean-700">
-                  {count === 0 && hasSamples
+                  {showSamples && !user
                     ? "Sample preview"
-                    : `${count} ${count === 1 ? "magnet" : "magnets"}`}
+                    : `${count} of ${MAX_ORDER_PHOTOS} selected`}
                 </span>
                 {selected ? (
                   expanded ? (
@@ -526,7 +615,7 @@ export default function Designer() {
                   <div className="absolute inset-0">
                     <BoardPreview3D
                       photoUrl={selected.url}
-                      boardColor={selected.edit.boardColor}
+                      boardColor={selected.boardColor}
                       boardAspect={selectedDimensions?.aspect ?? 1}
                     />
                   </div>
@@ -536,71 +625,80 @@ export default function Designer() {
                   </span>
                 </div>
 
-                <div className="flex flex-wrap items-center justify-between gap-3 border-t border-slate-100 px-5 py-3">
-                  <div className="flex items-center gap-1 rounded-xl bg-slate-100 p-1">
-                    {(["portrait", "landscape"] as const).map((orientation) => (
-                      <button
-                        key={orientation}
-                        type="button"
-                        onClick={() =>
-                          updateEdit(selected.key, {
-                            ...selected.edit,
-                            orientation,
-                          })
-                        }
-                        aria-pressed={selected.edit.orientation === orientation}
-                        className={segmentClasses(
-                          selected.edit.orientation === orientation
-                        )}
-                      >
-                        {orientation === "portrait" ? "Portrait" : "Landscape"}
-                      </button>
-                    ))}
+                {selected.sample ? (
+                  <div className="flex items-center justify-between gap-3 border-t border-slate-100 px-5 py-3">
+                    <p className="text-xs text-slate-500">
+                      Sample design for preview. Sign in and add your photos to
+                      see your own.
+                    </p>
                   </div>
-                  <div className="flex items-center gap-2">
-                    <span className="text-xs font-medium text-slate-500">
-                      Board
-                    </span>
-                    {(["white", "black"] as const).map((color) => (
-                      <button
-                        key={color}
-                        type="button"
-                        onClick={() =>
-                          updateEdit(selected.key, {
-                            ...selected.edit,
-                            boardColor: color,
-                          })
-                        }
-                        aria-label={`${color} board`}
-                        aria-pressed={selected.edit.boardColor === color}
-                        className={`h-7 w-7 rounded-full border-2 transition ${
-                          selected.edit.boardColor === color
-                            ? "border-ocean-500 ring-2 ring-ocean-200"
-                            : "border-slate-200"
-                        }`}
-                        style={{
-                          backgroundColor:
-                            color === "white" ? "#ffffff" : "#111827",
-                        }}
-                      />
-                    ))}
+                ) : (
+                  <div className="flex flex-wrap items-center justify-between gap-3 border-t border-slate-100 px-5 py-3">
+                    <div className="flex items-center gap-1 rounded-xl bg-slate-100 p-1">
+                      {(["portrait", "landscape"] as const).map((orientation) => (
+                        <button
+                          key={orientation}
+                          type="button"
+                          onClick={() =>
+                            handleOptionsChange(selected, { orientation })
+                          }
+                          aria-pressed={selected.orientation === orientation}
+                          className={`rounded-lg px-3 py-1.5 text-xs font-semibold transition ${
+                            selected.orientation === orientation
+                              ? "bg-white text-ocean-700 shadow-sm"
+                              : "text-slate-500 hover:text-slate-700"
+                          }`}
+                        >
+                          {orientation === "portrait"
+                            ? "Portrait"
+                            : "Landscape"}
+                        </button>
+                      ))}
+                    </div>
+                    <div className="flex items-center gap-2">
+                      <span className="text-xs font-medium text-slate-500">
+                        Board
+                      </span>
+                      {(["white", "black"] as const).map((color) => (
+                        <button
+                          key={color}
+                          type="button"
+                          onClick={() =>
+                            handleOptionsChange(selected, { boardColor: color })
+                          }
+                          aria-label={`${color} board`}
+                          aria-pressed={selected.boardColor === color}
+                          className={`h-7 w-7 rounded-full border-2 transition ${
+                            selected.boardColor === color
+                              ? "border-ocean-500 ring-2 ring-ocean-200"
+                              : "border-slate-200"
+                          }`}
+                          style={{
+                            backgroundColor:
+                              color === "white" ? "#ffffff" : "#111827",
+                          }}
+                        />
+                      ))}
+                    </div>
                   </div>
-                </div>
+                )}
 
                 <div className="flex items-center justify-between gap-3 border-t border-slate-100 px-5 py-3">
                   <p className="min-w-0 truncate text-xs text-slate-500">
                     {selected.sample ? "Sample design" : selected.name} /{" "}
                     {selectedDimensions?.widthIn} x{" "}
                     {selectedDimensions?.heightIn} inch /{" "}
-                    {selected.edit.boardColor} board
+                    {selected.boardColor} board
                   </p>
-                  <button
-                    type="button"
-                    onClick={() => removePhoto(selected.key)}
-                    className="shrink-0 text-xs font-semibold text-red-600 transition hover:underline"
-                  >
-                    Remove
-                  </button>
+                  {!selected.sample ? (
+                    <button
+                      type="button"
+                      onClick={() => handleDelete(selected)}
+                      className="shrink-0 text-xs font-semibold text-red-600 transition hover:underline"
+                    >
+                      Delete
+                    </button>
+                  ) : null}
                 </div>
               </>
             ) : (
@@ -622,7 +720,8 @@ export default function Designer() {
 
           {!expanded ? (
             <p className="mt-3 px-2 text-center text-xs text-slate-500">
-              Photos stay on your device until you send them on WhatsApp.
+              Photos are saved in your account. Ones not sent for print are
+              deleted after {RETENTION_DAYS} days.
             </p>
           ) : null}
         </div>
@@ -638,7 +737,8 @@ export default function Designer() {
               Add your photos
             </h2>
             <p className="text-xs text-slate-500">
-              Up to {MAX_MAGNETS}. You can pick many at once.
+              Up to {MAX_LIBRARY_PHOTOS} saved, order up to {MAX_ORDER_PHOTOS}
+              at a time.
             </p>
           </div>
         </div>
@@ -652,56 +752,86 @@ export default function Designer() {
           </p>
         ) : null}
 
-        <label
-          htmlFor="photos-input"
-          onDragOver={(event) => {
-            event.preventDefault();
-            setDragging(true);
-          }}
-          onDragLeave={() => setDragging(false)}
-          onDrop={(event) => {
-            event.preventDefault();
-            setDragging(false);
-            handleAddFiles(Array.from(event.dataTransfer.files ?? []));
-          }}
-          className={`mt-4 flex cursor-pointer flex-col items-center justify-center gap-2 rounded-2xl border-2 border-dashed px-6 text-center transition ${
-            count > 0 ? "py-5" : "py-8"
-          } ${
-            dragging
-              ? "border-ocean-400 bg-ocean-50"
-              : "border-ocean-200 bg-ocean-50/40 hover:border-ocean-300 hover:bg-ocean-50"
-          }`}
-        >
-          <span className="flex h-11 w-11 items-center justify-center rounded-2xl bg-white text-ocean-600 shadow-sm">
-            <UploadIcon className="h-5 w-5" />
-          </span>
-          <span className="text-base font-semibold text-slate-800">
-            {busy
-              ? progress
-              : count > 0
-                ? "Add more photos"
-                : "Tap to choose your photos"}
-          </span>
-          <span className="text-xs text-slate-500">
-            JPG or PNG up to 15 MB each / multiple photos allowed
-          </span>
-        </label>
+        {!configured ? (
+          <div className="mt-4 rounded-2xl border border-amber-100 bg-amber-50 px-4 py-3 text-sm text-amber-800">
+            Accounts are being set up. Please check back shortly.
+          </div>
+        ) : !user ? (
+          <div className="mt-4 rounded-2xl border-2 border-dashed border-ocean-200 bg-ocean-50/40 px-6 py-8 text-center">
+            <span className="mx-auto flex h-12 w-12 items-center justify-center rounded-2xl bg-white text-ocean-600 shadow-sm">
+              <UserIcon className="h-6 w-6" />
+            </span>
+            <p className="mt-3 text-base font-semibold text-slate-800">
+              Sign in with Google to add photos
+            </p>
+            <p className="mx-auto mt-1 max-w-sm text-xs leading-5 text-slate-500">
+              Your photos are saved to your account. Photos not sent for print
+              are deleted after {RETENTION_DAYS} days.
+            </p>
+            <button
+              type="button"
+              onClick={() => signInWithGoogle()}
+              className="mt-4 inline-flex items-center gap-2 rounded-xl bg-ocean-600 px-5 py-3 text-sm font-semibold text-white shadow-soft transition hover:bg-ocean-700"
+            >
+              <UserIcon className="h-4 w-4" />
+              Continue with Google
+            </button>
+          </div>
+        ) : (
+          <>
+            <label
+              htmlFor="photos-input"
+              onDragOver={(event) => {
+                event.preventDefault();
+                setDragging(true);
+              }}
+              onDragLeave={() => setDragging(false)}
+              onDrop={(event) => {
+                event.preventDefault();
+                setDragging(false);
+                handleAddFiles(Array.from(event.dataTransfer.files ?? []));
+              }}
+              className={`mt-4 flex cursor-pointer flex-col items-center justify-center gap-2 rounded-2xl border-2 border-dashed px-6 text-center transition ${
+                libraryCount > 0 ? "py-5" : "py-8"
+              } ${
+                dragging
+                  ? "border-ocean-400 bg-ocean-50"
+                  : "border-ocean-200 bg-ocean-50/40 hover:border-ocean-300 hover:bg-ocean-50"
+              }`}
+            >
+              <span className="flex h-11 w-11 items-center justify-center rounded-2xl bg-white text-ocean-600 shadow-sm">
+                <UploadIcon className="h-5 w-5" />
+              </span>
+              <span className="text-base font-semibold text-slate-800">
+                {busy
+                  ? progress
+                  : libraryCount > 0
+                    ? "Add more photos"
+                    : "Tap to choose your photos"}
+              </span>
+              <span className="text-xs text-slate-500">
+                JPG or PNG up to 15 MB each / {libraryCount} of{" "}
+                {MAX_LIBRARY_PHOTOS} saved
+              </span>
+            </label>
 
-        <input
-          id="photos-input"
-          ref={fileRef}
-          type="file"
-          accept="image/*"
-          multiple
-          disabled={busy || count >= MAX_MAGNETS}
-          className="sr-only"
-          onChange={(event) => {
-            handleAddFiles(Array.from(event.target.files ?? []));
-            event.target.value = "";
-          }}
-        />
+            <input
+              id="photos-input"
+              ref={fileRef}
+              type="file"
+              accept="image/*"
+              multiple
+              disabled={busy || libraryCount >= MAX_LIBRARY_PHOTOS}
+              className="sr-only"
+              onChange={(event) => {
+                handleAddFiles(Array.from(event.target.files ?? []));
+                event.target.value = "";
+              }}
+            />
+          </>
+        )}
 
-        {hasSamples ? (
+        {showSamples && user ? (
           <div className="mt-4 rounded-2xl border border-amber-100 bg-amber-50 px-4 py-3">
             <p className="text-xs font-medium leading-5 text-amber-800">
               These sample designs are for preview only. Add your own photos
@@ -717,76 +847,97 @@ export default function Designer() {
               </button>
               <button
                 type="button"
-                onClick={removeSamples}
+                onClick={() => setSamplesDismissed(true)}
                 className="rounded-lg border border-amber-200 bg-white px-3 py-1.5 text-xs font-semibold text-amber-800 transition hover:bg-amber-100"
               >
-                Remove samples
+                Hide samples
               </button>
             </div>
           </div>
         ) : null}
 
-        {photos.length > 0 ? (
+        {user && libraryLoading ? (
           <div className="mt-6">
-            <p className="flex items-center gap-2 text-sm font-bold text-slate-800">
-              Your magnets
-              <span
-                className={`rounded-full px-2 py-0.5 text-xs font-semibold ${
-                  hasSamples
-                    ? "bg-amber-50 text-amber-700"
-                    : "bg-emerald-50 text-emerald-700"
-                }`}
-              >
-                {hasSamples ? "Sample preview" : `${count} of ${MAX_MAGNETS}`}
+            <p className="text-sm font-bold text-slate-800">Your photos</p>
+            <div className="mt-3 grid grid-cols-4 gap-3 sm:grid-cols-5">
+              {Array.from({ length: 5 }).map((_, index) => (
+                <div
+                  key={index}
+                  className="aspect-square animate-pulse rounded-xl bg-slate-100"
+                />
+              ))}
+            </div>
+          </div>
+        ) : null}
+
+        {user && !libraryLoading && (library?.length ?? 0) > 0 ? (
+          <div className="mt-6">
+            <p className="flex flex-wrap items-center gap-2 text-sm font-bold text-slate-800">
+              Your photos
+              <span className="rounded-full bg-emerald-50 px-2 py-0.5 text-xs font-semibold text-emerald-700">
+                {count} of {MAX_ORDER_PHOTOS} selected for this order
               </span>
             </p>
             <div className="mt-3 grid grid-cols-4 gap-3 sm:grid-cols-5">
-              {photos.map((photo, index) => (
-                <div key={photo.key} className="relative">
-                  <button
-                    type="button"
-                    onClick={() => selectPhoto(photo.key)}
-                    aria-label={
-                      photo.sample
-                        ? `Preview ${photo.name}`
-                        : `Preview photo ${index + 1}: ${photo.name}`
-                    }
-                    className={`block aspect-square w-full rounded-xl border-2 bg-cover bg-center transition ${
-                      selected?.key === photo.key
-                        ? "border-ocean-500 ring-2 ring-ocean-200"
-                        : photo.sample
-                          ? "border-dashed border-amber-300 shadow-sm hover:border-amber-400"
+              {(library ?? []).map((photo) => {
+                const item = displayPhotos.find((p) => p.key === photo.id);
+                if (!item) return null;
+                const isSelected = selectedIds.includes(photo.id);
+                const isViewed = selected?.key === photo.id;
+                return (
+                  <div key={photo.id} className="relative">
+                    <button
+                      type="button"
+                      onClick={() => setSelectedKey(photo.id)}
+                      aria-label={`Preview ${photo.name}`}
+                      className={`block aspect-square w-full rounded-xl border-2 bg-cover bg-center transition ${
+                        isViewed
+                          ? "border-ocean-500 ring-2 ring-ocean-200"
                           : "border-white shadow-sm hover:border-ocean-200"
-                    }`}
-                    style={{ backgroundImage: `url(${photo.url})` }}
-                  />
-                  <span
-                    className="absolute bottom-1 left-1 h-3.5 w-3.5 rounded-full border border-white shadow"
-                    style={{
-                      backgroundColor:
-                        photo.edit.boardColor === "white"
-                          ? "#ffffff"
-                          : "#111827",
-                    }}
-                  />
-                  <button
-                    type="button"
-                    onClick={() => removePhoto(photo.key)}
-                    aria-label={`Remove photo ${index + 1}`}
-                    className="absolute -right-1.5 -top-1.5 flex h-6 w-6 items-center justify-center rounded-full bg-slate-800 text-white shadow transition hover:bg-red-600"
-                  >
-                    <CloseIcon className="h-3 w-3" />
-                  </button>
-                  <span
-                    className={`mt-1 block text-center text-[10px] font-medium ${
-                      photo.sample ? "text-amber-600" : "text-slate-400"
-                    }`}
-                  >
-                    {photo.sample ? "Sample" : index + 1}
-                  </span>
-                </div>
-              ))}
-              {count < MAX_MAGNETS ? (
+                      }`}
+                      style={{ backgroundImage: `url("${photo.url}")` }}
+                    />
+                    <button
+                      type="button"
+                      onClick={() => toggleSelect(item)}
+                      aria-label={
+                        isSelected
+                          ? `Remove ${photo.name} from order`
+                          : `Add ${photo.name} to order`
+                      }
+                      aria-pressed={isSelected}
+                      className={`absolute left-1 top-1 flex h-6 w-6 items-center justify-center rounded-full border shadow transition ${
+                        isSelected
+                          ? "border-ocean-600 bg-ocean-600 text-white"
+                          : "border-slate-300 bg-white/95 text-transparent hover:border-ocean-400"
+                      }`}
+                    >
+                      <CheckIcon className="h-3.5 w-3.5" />
+                    </button>
+                    <span
+                      className="absolute bottom-1 left-1 h-3.5 w-3.5 rounded-full border border-white shadow"
+                      style={{
+                        backgroundColor:
+                          photo.boardColor === "white" ? "#ffffff" : "#111827",
+                      }}
+                    />
+                    <button
+                      type="button"
+                      onClick={() => handleDelete(item)}
+                      aria-label={`Delete ${photo.name}`}
+                      className="absolute -right-1.5 -top-1.5 flex h-6 w-6 items-center justify-center rounded-full bg-slate-800 text-white shadow transition hover:bg-red-600"
+                    >
+                      <TrashIcon className="h-3 w-3" />
+                    </button>
+                    {photo.printed ? (
+                      <span className="mt-1 block text-center text-[10px] font-medium text-emerald-600">
+                        Printed
+                      </span>
+                    ) : null}
+                  </div>
+                );
+              })}
+              {libraryCount < MAX_LIBRARY_PHOTOS ? (
                 <button
                   type="button"
                   onClick={() => fileRef.current?.click()}
@@ -799,9 +950,8 @@ export default function Designer() {
               ) : null}
             </div>
             <p className="mt-3 text-xs text-slate-500">
-              Tap a photo to preview it, then choose portrait or landscape and
-              a white or black board. Our print team fine-tunes the crop before
-              printing.
+              Tap the checkmark to add a photo to this order. Our print team
+              fine-tunes the crop before printing.
             </p>
           </div>
         ) : null}
@@ -827,12 +977,14 @@ export default function Designer() {
             <span className="text-xl font-extrabold text-slate-900">
               {formatINR(PRODUCT.price)}
             </span>{" "}
-            per magnet. Add photos above to see your total.
+            per magnet. Add and select photos above to see your total.
           </div>
         ) : (
           <dl className="mt-5 space-y-2 text-sm">
             <div className="flex items-center justify-between text-slate-600">
-              <dt>{count} x {PRODUCT.name}, 6 x 8 or 8 x 6 inch</dt>
+              <dt>
+                {count} x {PRODUCT.name}, 6 x 8 or 8 x 6 inch
+              </dt>
               <dd className="font-medium text-slate-800">
                 {formatINR(price.subtotal)}
               </dd>
@@ -873,7 +1025,7 @@ export default function Designer() {
         <button
           type="button"
           onClick={handleOrder}
-          disabled={count === 0 || sharing}
+          disabled={count === 0 || sharing || !user}
           className="mt-5 flex w-full items-center justify-center gap-2 rounded-xl bg-ocean-600 px-6 py-4 text-base font-semibold text-white shadow-soft transition hover:bg-ocean-700 disabled:cursor-not-allowed disabled:bg-slate-300 disabled:shadow-none"
         >
           <MessageIcon className="h-5 w-5" />
@@ -881,14 +1033,28 @@ export default function Designer() {
             ? "Opening share..."
             : count > 0
               ? `Send order on WhatsApp - ${formatINR(price.total)}`
-              : "Add a photo to continue"}
+              : "Select a photo to continue"}
         </button>
 
-        <p className="mt-3 flex items-start justify-center gap-1.5 text-center text-xs text-slate-500">
-          <CheckIcon className="mt-0.5 h-3.5 w-3.5 shrink-0 text-emerald-500" />
-          Your photos are shared automatically on supported phones. Otherwise
-          download them and attach in the chat.
-        </p>
+        {user ? (
+          <p className="mt-3 flex items-start justify-center gap-1.5 text-center text-xs text-slate-500">
+            <CheckIcon className="mt-0.5 h-3.5 w-3.5 shrink-0 text-emerald-500" />
+            Photos sent for print stay in your account. Others are deleted after{" "}
+            {RETENTION_DAYS} days.{" "}
+            <Link
+              href="/account"
+              className="font-semibold text-ocean-700 hover:underline"
+            >
+              View account
+            </Link>
+          </p>
+        ) : (
+          <p className="mt-3 text-center text-xs text-slate-500">
+            {authLoading
+              ? "Checking your account..."
+              : "Sign in to place an order."}
+          </p>
+        )}
       </section>
     </div>
   );

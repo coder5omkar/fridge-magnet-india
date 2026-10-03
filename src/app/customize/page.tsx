@@ -6,7 +6,7 @@ import { LockIcon } from "@/components/icons";
 export const metadata: Metadata = {
   title: "Design Your Photo Magnets",
   description:
-    "Add up to 10 photos, preview every magnet in 3D, and order photo magnets sized to match each photo. No signup and no address forms.",
+    "Sign in with Google, save up to 50 photos, preview every magnet in 3D, and order up to 10 magnets at a time on WhatsApp.",
 };
 
 export default function CustomizePage() {
@@ -27,7 +27,8 @@ export default function CustomizePage() {
           </h1>
           <p className="mt-3 flex items-center gap-2 text-sm text-slate-500">
             <LockIcon className="h-4 w-4 text-ocean-600" />
-            Photos stay on your device until you send them on WhatsApp.
+            Your photos are stored securely in your account. Photos not sent
+            for print are deleted after 3 days.
           </p>
         </header>
 
@@ -43,8 +44,8 @@ export default function CustomizePage() {
                 1. Add your photos
               </span>
               <br />
-              Pick up to 10 photos. Each one becomes a magnet sized to match
-              its shape.
+              Sign in with Google and save up to 50 photos. Select up to 10 for
+              each order.
             </p>
             <p>
               <span className="font-semibold text-slate-800">

@@ -9,7 +9,7 @@ export interface PhotoInfo {
 export class PhotoError extends Error {}
 
 const MAX_FILE_BYTES = 15 * 1024 * 1024;
-const MAX_SIDE = 1600;
+const MAX_SIDE = 2048;
 
 export function formatBytes(bytes: number): string {
   if (bytes >= 1024 * 1024) return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;

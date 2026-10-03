@@ -2,7 +2,14 @@
 
 import { useState } from "react";
 import Link from "next/link";
-import { CloseIcon, FishIcon, MenuIcon, MessageIcon } from "@/components/icons";
+import {
+  CloseIcon,
+  FishIcon,
+  MenuIcon,
+  MessageIcon,
+  UserIcon,
+} from "@/components/icons";
+import { useAuth } from "@/lib/auth";
 import { siteConfig, whatsappLink } from "@/lib/config";
 
 const links = [
@@ -12,6 +19,9 @@ const links = [
 
 export default function Header() {
   const [open, setOpen] = useState(false);
+  const { user, signInWithGoogle } = useAuth();
+
+  const emailInitial = user?.email?.charAt(0).toUpperCase() ?? "U";
 
   return (
     <header className="sticky top-0 z-40 border-b border-slate-200/80 bg-white/90 backdrop-blur">
@@ -56,12 +66,35 @@ export default function Header() {
           >
             <MessageIcon className="h-5 w-5" />
           </a>
+
+          {user ? (
+            <Link
+              href="/account"
+              className="inline-flex items-center gap-2 rounded-xl border border-slate-200 bg-white px-3 py-2.5 text-sm font-semibold text-slate-700 transition hover:border-ocean-200 hover:text-ocean-700"
+            >
+              <span className="flex h-6 w-6 items-center justify-center rounded-full bg-ocean-600 text-xs font-bold text-white">
+                {emailInitial}
+              </span>
+              <span className="hidden sm:inline">My account</span>
+            </Link>
+          ) : (
+            <button
+              type="button"
+              onClick={() => signInWithGoogle()}
+              className="hidden items-center gap-2 rounded-xl border border-slate-200 bg-white px-3 py-2.5 text-sm font-semibold text-slate-700 transition hover:border-ocean-200 hover:text-ocean-700 sm:inline-flex"
+            >
+              <UserIcon className="h-4 w-4" />
+              Sign in
+            </button>
+          )}
+
           <Link
             href="/customize"
             className="hidden rounded-xl bg-ocean-600 px-4 py-2.5 text-sm font-semibold text-white shadow-soft transition hover:bg-ocean-700 sm:inline-flex"
           >
             Start designing
           </Link>
+
           <button
             type="button"
             onClick={() => setOpen((value) => !value)}
@@ -90,6 +123,26 @@ export default function Header() {
               {link.label}
             </Link>
           ))}
+          {user ? (
+            <Link
+              href="/account"
+              onClick={() => setOpen(false)}
+              className="block rounded-lg px-3 py-3 text-sm font-medium text-slate-700 transition hover:bg-ocean-50 hover:text-ocean-700"
+            >
+              My account
+            </Link>
+          ) : (
+            <button
+              type="button"
+              onClick={() => {
+                setOpen(false);
+                signInWithGoogle();
+              }}
+              className="block w-full rounded-lg px-3 py-3 text-left text-sm font-medium text-slate-700 transition hover:bg-ocean-50 hover:text-ocean-700"
+            >
+              Sign in with Google
+            </button>
+          )}
           <div className="mt-2 grid grid-cols-2 gap-2">
             <Link
               href="/customize"
