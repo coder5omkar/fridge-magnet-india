@@ -6,7 +6,7 @@ export const PRODUCT = {
   mrp: 399,
 };
 
-export const MAX_QUANTITY = 20;
+export const MAX_MAGNETS = 10;
 export const SHIPPING_FEE = 49;
 
 export interface PriceBreakdown {
@@ -18,19 +18,19 @@ export interface PriceBreakdown {
   total: number;
 }
 
-export function discountPercent(quantity: number): number {
-  if (quantity >= 5) return 15;
-  if (quantity >= 2) return 10;
+export function discountPercent(magnetCount: number): number {
+  if (magnetCount >= 5) return 15;
+  if (magnetCount >= 2) return 10;
   return 0;
 }
 
-export function computePrice(quantity: number): PriceBreakdown {
-  const safeQuantity = Math.max(1, Math.min(MAX_QUANTITY, quantity));
-  const subtotal = PRODUCT.price * safeQuantity;
-  const percent = discountPercent(safeQuantity);
+export function computePrice(magnetCount: number): PriceBreakdown {
+  const count = Math.max(1, Math.min(MAX_MAGNETS, magnetCount));
+  const subtotal = PRODUCT.price * count;
+  const percent = discountPercent(count);
   const discountAmount = Math.round((subtotal * percent) / 100);
   const afterDiscount = subtotal - discountAmount;
-  const shipping = safeQuantity >= 2 ? 0 : SHIPPING_FEE;
+  const shipping = count >= 2 ? 0 : SHIPPING_FEE;
   return {
     unitPrice: PRODUCT.price,
     subtotal,
