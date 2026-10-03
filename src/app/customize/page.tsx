@@ -48,20 +48,19 @@ export default function CustomizePage() {
             </p>
             <p>
               <span className="font-semibold text-slate-800">
-                2. Make it perfect
+                2. Choose the look
               </span>
               <br />
-              Move, zoom and pick a white or black board. What you see is
-              exactly what gets printed.
+              Pick portrait or landscape and a white or black board. Our print
+              team fine-tunes the crop before printing.
             </p>
             <p>
               <span className="font-semibold text-slate-800">
                 3. Send on WhatsApp
               </span>
               <br />
-              Your edited photos attach automatically on supported phones, or
-              download them and attach in the chat. Pay by UPI after
-              confirmation.
+              Your photos attach automatically on supported phones, or download
+              them and attach in the chat. Pay by UPI after confirmation.
             </p>
           </div>
         </div>

@@ -18,13 +18,21 @@ interface BoardPreview3DProps {
   boardAspect: number;
 }
 
-function applyCoverUV(texture: THREE.Texture, aspect: number) {
-  if (aspect >= 1) {
-    texture.repeat.set(1 / aspect, 1);
-    texture.offset.set((1 - 1 / aspect) / 2, 0);
+function applyCoverUV(
+  texture: THREE.Texture,
+  textureAspect: number,
+  planeAspect: number
+) {
+  const photo = textureAspect > 0 ? textureAspect : 1;
+  const plane = planeAspect > 0 ? planeAspect : 1;
+  if (photo >= plane) {
+    const repeatX = plane / photo;
+    texture.repeat.set(repeatX, 1);
+    texture.offset.set((1 - repeatX) / 2, 0);
   } else {
-    texture.repeat.set(1, aspect);
-    texture.offset.set(0, (1 - aspect) / 2);
+    const repeatY = photo / plane;
+    texture.repeat.set(1, repeatY);
+    texture.offset.set(0, (1 - repeatY) / 2);
   }
   texture.wrapS = THREE.ClampToEdgeWrapping;
   texture.wrapT = THREE.ClampToEdgeWrapping;
@@ -51,7 +59,7 @@ export default function BoardPreview3D({
   boardColor,
   boardAspect,
 }: BoardPreview3DProps) {
-  const texture = usePhotoTexture(photoUrl);
+  const texture = usePhotoTexture(photoUrl, boardAspect);
   const board = boardAspect > 0 ? boardAspect : 1;
   const boardWidth = board >= 1 ? 2 : 2 * board;
   const boardHeight = board >= 1 ? 2 / board : 2;
@@ -63,6 +71,7 @@ export default function BoardPreview3D({
       dpr={[1, 1.75]}
       camera={{ position: [1.35, 0.75, 4.1], fov: 35 }}
       gl={{ antialias: true, alpha: true }}
+      style={{ touchAction: "pan-y" }}
     >
       <RendererSettings />
       <ambientLight intensity={0.9} />
@@ -125,23 +134,25 @@ export default function BoardPreview3D({
   );
 }
 
-function usePhotoTexture(photoUrl: string) {
-  const [texture, setTexture] = useState<THREE.Texture | null>(null);
+function usePhotoTexture(photoUrl: string, boardAspect: number) {
+  const [loaded, setLoaded] = useState<{
+    texture: THREE.Texture;
+    aspect: number;
+  } | null>(null);
 
   useEffect(() => {
     let active = true;
     const loader = new THREE.TextureLoader();
-    loader.load(photoUrl, (loaded) => {
+    loader.load(photoUrl, (texture) => {
       if (!active) {
-        loaded.dispose();
+        texture.dispose();
         return;
       }
-      loaded.colorSpace = THREE.SRGBColorSpace;
-      loaded.anisotropy = 8;
-      const width = loaded.image?.width ?? 1;
-      const height = loaded.image?.height ?? 1;
-      applyCoverUV(loaded, width / height || 1);
-      setTexture(loaded);
+      texture.colorSpace = THREE.SRGBColorSpace;
+      texture.anisotropy = 8;
+      const width = texture.image?.width ?? 1;
+      const height = texture.image?.height ?? 1;
+      setLoaded({ texture, aspect: width / height || 1 });
     });
     return () => {
       active = false;
@@ -149,11 +160,17 @@ function usePhotoTexture(photoUrl: string) {
   }, [photoUrl]);
 
   useEffect(() => {
-    const current = texture;
+    if (loaded) {
+      applyCoverUV(loaded.texture, loaded.aspect, boardAspect);
+    }
+  }, [loaded, boardAspect]);
+
+  useEffect(() => {
+    const current = loaded?.texture;
     return () => {
       current?.dispose();
     };
-  }, [texture]);
+  }, [loaded]);
 
-  return texture;
+  return loaded?.texture ?? null;
 }

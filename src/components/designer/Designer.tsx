@@ -11,21 +11,13 @@ import {
   ExpandIcon,
   ImageIcon,
   MessageIcon,
-  PencilIcon,
   PhoneIcon,
   PlusIcon,
   RotateIcon,
   UploadIcon,
 } from "@/components/icons";
 import { siteConfig, telLink, whatsappLink } from "@/lib/config";
-import {
-  boardDimensions,
-  canvasSizeForBoard,
-  defaultEdit,
-  drawComposite,
-  renderToBlob,
-  type PhotoEdit,
-} from "@/lib/fitting";
+import { boardDimensions, defaultEdit, type PhotoEdit } from "@/lib/fitting";
 import { log } from "@/lib/logger";
 import { PhotoError, preparePhoto, type PhotoInfo } from "@/lib/photo";
 import {
@@ -35,7 +27,6 @@ import {
   formatINR,
 } from "@/lib/products";
 import { sampleDataUrl } from "@/lib/sampleArt";
-import PhotoEditor from "./PhotoEditor";
 
 const BoardPreview3D = dynamic(() => import("./BoardPreview3D"), {
   ssr: false,
@@ -49,11 +40,9 @@ interface MagnetPhoto extends PhotoInfo {
   sample?: boolean;
   file?: File;
   edit: PhotoEdit;
-  previewUrl?: string;
 }
 
 type OrderMethod = "share" | "whatsapp" | "cancelled";
-type PreviewView = "3d" | "edit";
 
 interface OrderInfo {
   id: string;
@@ -63,36 +52,12 @@ interface OrderInfo {
   files: File[];
 }
 
-const imageCache = new Map<string, HTMLImageElement>();
-
-function getImage(url: string): Promise<HTMLImageElement> {
-  const cached = imageCache.get(url);
-  if (cached) return Promise.resolve(cached);
-  return new Promise((resolve, reject) => {
-    const image = new Image();
-    image.onload = () => {
-      if (imageCache.size > 40) {
-        const firstKey = imageCache.keys().next().value;
-        if (firstKey) imageCache.delete(firstKey);
-      }
-      imageCache.set(url, image);
-      resolve(image);
-    };
-    image.onerror = () => reject(new Error("Could not load image"));
-    image.src = url;
-  });
-}
-
 function aspectOf(photo: PhotoInfo): number {
   return photo.width / photo.height || 1;
 }
 
-function dimensionsOf(photo: PhotoInfo) {
-  return boardDimensions(aspectOf(photo));
-}
-
-function tabClasses(active: boolean): string {
-  return `flex items-center justify-center gap-1.5 rounded-lg px-3 py-2 text-xs font-semibold transition ${
+function segmentClasses(active: boolean): string {
+  return `rounded-lg px-3 py-1.5 text-xs font-semibold transition ${
     active
       ? "bg-white text-ocean-700 shadow-sm"
       : "text-slate-500 hover:text-slate-700"
@@ -108,7 +73,7 @@ function createSamplePhotos(): MagnetPhoto[] {
     height: 256,
     sizeBytes: 0,
     sample: true,
-    edit: defaultEdit,
+    edit: defaultEdit(1),
   }));
 }
 
@@ -139,7 +104,6 @@ export default function Designer() {
     createSamplePhotos()
   );
   const [selectedKey, setSelectedKey] = useState<string | null>(null);
-  const [previewView, setPreviewView] = useState<PreviewView>("3d");
   const [busy, setBusy] = useState(false);
   const [progress, setProgress] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -152,9 +116,6 @@ export default function Designer() {
   const fileRef = useRef<HTMLInputElement>(null);
   const previewRef = useRef<HTMLDivElement>(null);
   const topRef = useRef<HTMLDivElement>(null);
-  const bakeTimersRef = useRef(
-    new Map<string, ReturnType<typeof setTimeout>>()
-  );
 
   const selected =
     photos.find((photo) => photo.key === selectedKey) ?? photos[0] ?? null;
@@ -162,7 +123,9 @@ export default function Designer() {
   const count = realPhotos.length;
   const hasSamples = photos.some((photo) => photo.sample);
   const price = computePrice(count);
-  const selectedDimensions = selected ? dimensionsOf(selected) : null;
+  const selectedDimensions = selected
+    ? boardDimensions(selected.edit.orientation)
+    : null;
 
   useEffect(() => {
     if (order) {
@@ -184,73 +147,19 @@ export default function Designer() {
     };
   }, [expanded]);
 
-  function bakePreview(photo: MagnetPhoto) {
-    getImage(photo.url)
-      .then((image) => {
-        const dimensions = dimensionsOf(photo);
-        const size = canvasSizeForBoard(dimensions.aspect, 640);
-        const canvas = document.createElement("canvas");
-        canvas.width = size.width;
-        canvas.height = size.height;
-        drawComposite(
-          canvas,
-          image,
-          aspectOf(photo),
-          dimensions.aspect,
-          photo.edit
-        );
-        const previewUrl = canvas.toDataURL("image/jpeg", 0.85);
-        setPhotos((current) =>
-          current.map((item) =>
-            item.key === photo.key ? { ...item, previewUrl } : item
-          )
-        );
-        log(
-          "photo_preview_baked",
-          {
-            key: photo.key,
-            boardColor: photo.edit.boardColor,
-            mode: photo.edit.mode,
-          },
-          "success"
-        );
-      })
-      .catch(() => {
-        log("photo_preview_failed", { key: photo.key }, "warn");
-      });
-  }
-
-  function scheduleBake(photo: MagnetPhoto) {
-    const timers = bakeTimersRef.current;
-    const existing = timers.get(photo.key);
-    if (existing) clearTimeout(existing);
-    timers.set(
-      photo.key,
-      setTimeout(() => {
-        timers.delete(photo.key);
-        bakePreview(photo);
-      }, 200)
-    );
-  }
-
   function updateEdit(key: string, edit: PhotoEdit) {
-    const target = photos.find((item) => item.key === key);
     setPhotos((current) =>
       current.map((item) => (item.key === key ? { ...item, edit } : item))
     );
-    log("photo_edited", {
+    log("photo_options_changed", {
       key,
+      orientation: edit.orientation,
       boardColor: edit.boardColor,
-      mode: edit.mode,
-      zoom: edit.zoom,
     });
-    if (target) scheduleBake({ ...target, edit });
   }
 
   function selectPhoto(key: string) {
     setSelectedKey(key);
-    const photo = photos.find((item) => item.key === key);
-    if (photo && !photo.previewUrl) scheduleBake(photo);
   }
 
   async function handleAddFiles(fileList: File[]) {
@@ -288,7 +197,7 @@ export default function Designer() {
           ...info,
           key: createPhotoKey(index),
           file: batch[index],
-          edit: defaultEdit,
+          edit: defaultEdit(aspectOf(info)),
         });
         log(
           "photo_ready",
@@ -314,8 +223,6 @@ export default function Designer() {
         ...added,
       ]);
       setSelectedKey(added[0].key);
-      setPreviewView("3d");
-      scheduleBake(added[0]);
       log("photos_added", { count: added.length }, "success");
       if (hadSamples) log("samples_removed", { reason: "auto" });
       if (firstAdd) {
@@ -360,56 +267,17 @@ export default function Designer() {
     }
     lines.push(`Total: ${formatINR(price.total)}`, "", "My photos for printing:");
     items.forEach((photo, index) => {
-      const dimensions = dimensionsOf(photo);
+      const dimensions = boardDimensions(photo.edit.orientation);
       lines.push(
-        `${index + 1}. ${photo.name} (${dimensions.widthIn} x ${dimensions.heightIn} inch, ${photo.edit.boardColor} board)`
+        `${index + 1}. ${photo.name} (${dimensions.widthIn} x ${dimensions.heightIn} inch, ${photo.edit.orientation}, ${photo.edit.boardColor} board)`
       );
     });
     lines.push(
       "",
-      "I am sharing my edited photos with this order (print-ready magnets with margins and board colour applied).",
+      "Please fine-tune the crop for printing if needed.",
       "I will share my delivery address here as well."
     );
     return lines.join("\n");
-  }
-
-  async function buildEditedFiles(items: MagnetPhoto[]): Promise<File[]> {
-    const files: File[] = [];
-    for (let index = 0; index < items.length; index++) {
-      const photo = items[index];
-      let created = false;
-      try {
-        const image = await getImage(photo.url);
-        const dimensions = dimensionsOf(photo);
-        const blob = await renderToBlob(
-          image,
-          aspectOf(photo),
-          dimensions.aspect,
-          photo.edit,
-          1600,
-          "image/jpeg",
-          0.92
-        );
-        if (blob) {
-          files.push(
-            new File([blob], `MemoryMagnet-${index + 1}.jpg`, {
-              type: "image/jpeg",
-            })
-          );
-          created = true;
-        }
-      } catch (caught) {
-        log(
-          "edited_photo_failed",
-          { name: photo.name, message: String(caught) },
-          "warn"
-        );
-      }
-      if (!created && photo.file) {
-        files.push(photo.file);
-      }
-    }
-    return files;
   }
 
   async function handleOrder() {
@@ -420,18 +288,9 @@ export default function Designer() {
     setSharing(true);
     const orderId = createOrderId();
     const message = buildMessage(orderId, realPhotos);
-
-    let files: File[] = [];
-    try {
-      files = await buildEditedFiles(realPhotos);
-      log(
-        "edited_photos_ready",
-        { orderId, count: files.length },
-        files.length > 0 ? "success" : "warn"
-      );
-    } catch (caught) {
-      log("edited_export_failed", { orderId, message: String(caught) }, "warn");
-    }
+    const files = realPhotos
+      .map((photo) => photo.file)
+      .filter((file): file is File => Boolean(file));
 
     let method: OrderMethod = "whatsapp";
     if (canShareFiles(files)) {
@@ -489,7 +348,7 @@ export default function Designer() {
     }
   }
 
-  function downloadEditedFiles() {
+  function downloadPhotos() {
     if (!order || order.files.length === 0) return;
     order.files.forEach((file, index) => {
       window.setTimeout(() => {
@@ -514,7 +373,6 @@ export default function Designer() {
     setOrder(null);
     setPhotos(createSamplePhotos());
     setSelectedKey(null);
-    setPreviewView("3d");
     setError(null);
     setCopied(false);
     setExpanded(false);
@@ -522,8 +380,7 @@ export default function Designer() {
   }
 
   if (order) {
-    const photoWord =
-      order.count === 1 ? "edited photo" : `${order.count} edited photos`;
+    const photoWord = order.count === 1 ? "photo" : `${order.count} photos`;
     const helper =
       order.method === "share"
         ? `Your order summary and ${photoWord} were shared. Pick WhatsApp in the share sheet if you have not finished yet, then share your delivery address in the chat.`
@@ -541,13 +398,14 @@ export default function Designer() {
           <p className="mx-auto mt-3 max-w-md text-sm leading-6 text-slate-600">
             {helper}
           </p>
-              <ol className="mx-auto mt-4 max-w-xs space-y-1 text-left text-xs text-slate-500">
+          <ol className="mx-auto mt-4 max-w-xs space-y-1 text-left text-xs text-slate-500">
             {realPhotos.map((photo, index) => {
-              const dimensions = dimensionsOf(photo);
+              const dimensions = boardDimensions(photo.edit.orientation);
               return (
                 <li key={photo.key} className="truncate">
                   {index + 1}. {photo.name} ({dimensions.widthIn} x{" "}
-                  {dimensions.heightIn} inch, {photo.edit.boardColor} board)
+                  {dimensions.heightIn} inch, {photo.edit.orientation},{" "}
+                  {photo.edit.boardColor} board)
                 </li>
               );
             })}
@@ -565,11 +423,11 @@ export default function Designer() {
             {order.files.length > 0 ? (
               <button
                 type="button"
-                onClick={downloadEditedFiles}
+                onClick={downloadPhotos}
                 className="inline-flex items-center gap-2 rounded-xl border border-slate-200 bg-white px-6 py-3.5 text-sm font-semibold text-slate-700 transition hover:border-ocean-200 hover:text-ocean-700"
               >
                 <DownloadIcon className="h-4 w-4" />
-                Download edited photos
+                Download photos
               </button>
             ) : null}
             <button
@@ -615,99 +473,59 @@ export default function Designer() {
       >
         <div className={expanded ? "w-full max-w-3xl" : "lg:sticky lg:top-24"}>
           <div className="overflow-hidden rounded-3xl border border-slate-200 bg-white shadow-card">
-            <div className="border-b border-slate-100 px-5 py-4">
-              <div className="flex items-center justify-between gap-3">
-                <div>
-                  <h2 className="text-sm font-bold text-slate-900">
-                    Live preview
-                  </h2>
-                  <p className="text-xs text-slate-500">
-                    {!selected
-                      ? "Your magnet will appear here"
-                      : previewView === "edit"
-                        ? "Drag to move the photo, slide to zoom"
-                        : "Drag to rotate, like holding it in your hand"}
-                  </p>
-                </div>
-                <div className="flex items-center gap-2">
-                  <span className="rounded-full bg-ocean-50 px-3 py-1 text-xs font-semibold text-ocean-700">
-                    {count === 0 && hasSamples
-                      ? "Sample preview"
-                      : `${count} ${count === 1 ? "magnet" : "magnets"}`}
-                  </span>
-                  {selected && previewView === "3d" ? (
-                    expanded ? (
-                      <button
-                        type="button"
-                        onClick={() => setExpanded(false)}
-                        aria-label="Close enlarged preview"
-                        className="flex h-9 w-9 items-center justify-center rounded-xl border border-slate-200 text-slate-600 transition hover:bg-slate-100"
-                      >
-                        <CloseIcon className="h-4 w-4" />
-                      </button>
-                    ) : (
-                      <button
-                        type="button"
-                        onClick={() => setExpanded(true)}
-                        aria-label="Enlarge preview"
-                        className="flex h-9 w-9 items-center justify-center rounded-xl border border-slate-200 text-slate-600 transition hover:border-ocean-200 hover:text-ocean-700"
-                      >
-                        <ExpandIcon className="h-4 w-4" />
-                      </button>
-                    )
-                  ) : null}
-                </div>
+            <div className="flex items-center justify-between gap-3 border-b border-slate-100 px-5 py-4">
+              <div>
+                <h2 className="text-sm font-bold text-slate-900">
+                  Live 3D preview
+                </h2>
+                <p className="text-xs text-slate-500">
+                  {selected
+                    ? "Drag to rotate, like holding it in your hand"
+                    : "Your magnet will appear here"}
+                </p>
               </div>
-
-              {selected ? (
-                <div className="mt-3 grid grid-cols-2 gap-1 rounded-xl bg-slate-100 p-1">
-                  <button
-                    type="button"
-                    onClick={() => setPreviewView("3d")}
-                    aria-pressed={previewView === "3d"}
-                    className={tabClasses(previewView === "3d")}
-                  >
-                    <RotateIcon className="h-3.5 w-3.5" />
-                    3D view
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => {
-                      setPreviewView("edit");
-                      setExpanded(false);
-                    }}
-                    aria-pressed={previewView === "edit"}
-                    className={tabClasses(previewView === "edit")}
-                  >
-                    <PencilIcon className="h-3.5 w-3.5" />
-                    Adjust photo
-                  </button>
-                </div>
-              ) : null}
+              <div className="flex items-center gap-2">
+                <span className="rounded-full bg-ocean-50 px-3 py-1 text-xs font-semibold text-ocean-700">
+                  {count === 0 && hasSamples
+                    ? "Sample preview"
+                    : `${count} ${count === 1 ? "magnet" : "magnets"}`}
+                </span>
+                {selected ? (
+                  expanded ? (
+                    <button
+                      type="button"
+                      onClick={() => setExpanded(false)}
+                      aria-label="Close enlarged preview"
+                      className="flex h-9 w-9 items-center justify-center rounded-xl border border-slate-200 text-slate-600 transition hover:bg-slate-100"
+                    >
+                      <CloseIcon className="h-4 w-4" />
+                    </button>
+                  ) : (
+                    <button
+                      type="button"
+                      onClick={() => setExpanded(true)}
+                      aria-label="Enlarge preview"
+                      className="flex h-9 w-9 items-center justify-center rounded-xl border border-slate-200 text-slate-600 transition hover:border-ocean-200 hover:text-ocean-700"
+                    >
+                      <ExpandIcon className="h-4 w-4" />
+                    </button>
+                  )
+                ) : null}
+              </div>
             </div>
 
             {selected ? (
-              previewView === "edit" ? (
-                <PhotoEditor
-                  photoUrl={selected.url}
-                  photoAspect={aspectOf(selected)}
-                  boardAspect={selectedDimensions?.aspect ?? 1}
-                  boardWidthIn={selectedDimensions?.widthIn ?? 8}
-                  boardHeightIn={selectedDimensions?.heightIn ?? 8}
-                  edit={selected.edit}
-                  onChange={(next) => updateEdit(selected.key, next)}
-                />
-              ) : (
+              <>
                 <div
                   className={
                     expanded
                       ? "relative h-[min(76vh,40rem)] w-full bg-gradient-to-b from-slate-100 via-ocean-50 to-slate-100"
-                      : "relative aspect-square bg-gradient-to-b from-slate-100 via-ocean-50 to-slate-100"
+                      : "relative h-[280px] w-full bg-gradient-to-b from-slate-100 via-ocean-50 to-slate-100 sm:h-auto sm:aspect-square"
                   }
                 >
                   <div className="absolute inset-0">
                     <BoardPreview3D
-                      photoUrl={selected.previewUrl ?? selected.url}
+                      photoUrl={selected.url}
                       boardColor={selected.edit.boardColor}
                       boardAspect={selectedDimensions?.aspect ?? 1}
                     />
@@ -717,9 +535,76 @@ export default function Designer() {
                     Drag to see every side
                   </span>
                 </div>
-              )
+
+                <div className="flex flex-wrap items-center justify-between gap-3 border-t border-slate-100 px-5 py-3">
+                  <div className="flex items-center gap-1 rounded-xl bg-slate-100 p-1">
+                    {(["portrait", "landscape"] as const).map((orientation) => (
+                      <button
+                        key={orientation}
+                        type="button"
+                        onClick={() =>
+                          updateEdit(selected.key, {
+                            ...selected.edit,
+                            orientation,
+                          })
+                        }
+                        aria-pressed={selected.edit.orientation === orientation}
+                        className={segmentClasses(
+                          selected.edit.orientation === orientation
+                        )}
+                      >
+                        {orientation === "portrait" ? "Portrait" : "Landscape"}
+                      </button>
+                    ))}
+                  </div>
+                  <div className="flex items-center gap-2">
+                    <span className="text-xs font-medium text-slate-500">
+                      Board
+                    </span>
+                    {(["white", "black"] as const).map((color) => (
+                      <button
+                        key={color}
+                        type="button"
+                        onClick={() =>
+                          updateEdit(selected.key, {
+                            ...selected.edit,
+                            boardColor: color,
+                          })
+                        }
+                        aria-label={`${color} board`}
+                        aria-pressed={selected.edit.boardColor === color}
+                        className={`h-7 w-7 rounded-full border-2 transition ${
+                          selected.edit.boardColor === color
+                            ? "border-ocean-500 ring-2 ring-ocean-200"
+                            : "border-slate-200"
+                        }`}
+                        style={{
+                          backgroundColor:
+                            color === "white" ? "#ffffff" : "#111827",
+                        }}
+                      />
+                    ))}
+                  </div>
+                </div>
+
+                <div className="flex items-center justify-between gap-3 border-t border-slate-100 px-5 py-3">
+                  <p className="min-w-0 truncate text-xs text-slate-500">
+                    {selected.sample ? "Sample design" : selected.name} /{" "}
+                    {selectedDimensions?.widthIn} x{" "}
+                    {selectedDimensions?.heightIn} inch /{" "}
+                    {selected.edit.boardColor} board
+                  </p>
+                  <button
+                    type="button"
+                    onClick={() => removePhoto(selected.key)}
+                    className="shrink-0 text-xs font-semibold text-red-600 transition hover:underline"
+                  >
+                    Remove
+                  </button>
+                </div>
+              </>
             ) : (
-              <div className="relative aspect-square bg-gradient-to-b from-slate-100 via-ocean-50 to-slate-100">
+              <div className="relative h-[280px] w-full bg-gradient-to-b from-slate-100 via-ocean-50 to-slate-100 sm:h-auto sm:aspect-square">
                 <div className="flex h-full flex-col items-center justify-center gap-3 px-8 text-center">
                   <span className="flex h-16 w-16 items-center justify-center rounded-3xl bg-white text-ocean-400 shadow-sm">
                     <ImageIcon className="h-8 w-8" />
@@ -728,28 +613,11 @@ export default function Designer() {
                     Add your first photo
                   </p>
                   <p className="text-xs leading-5 text-slate-500">
-                    It will appear here as a magnet you can rotate and zoom
+                    It will appear here as a magnet you can rotate
                   </p>
                 </div>
               </div>
             )}
-
-            {selected ? (
-              <div className="flex items-center justify-between gap-3 border-t border-slate-100 px-5 py-3">
-                <p className="min-w-0 truncate text-xs text-slate-500">
-                  {selected.sample ? "Sample design" : selected.name} /{" "}
-                  {selectedDimensions?.widthIn} x {selectedDimensions?.heightIn}{" "}
-                  inch / {selected.edit.boardColor} board
-                </p>
-                <button
-                  type="button"
-                  onClick={() => removePhoto(selected.key)}
-                  className="shrink-0 text-xs font-semibold text-red-600 transition hover:underline"
-                >
-                  Remove
-                </button>
-              </div>
-            ) : null}
           </div>
 
           {!expanded ? (
@@ -931,8 +799,9 @@ export default function Designer() {
               ) : null}
             </div>
             <p className="mt-3 text-xs text-slate-500">
-              Tap a photo to preview it, then use &ldquo;Adjust photo&rdquo; to
-              move, zoom, add a margin or change the board colour.
+              Tap a photo to preview it, then choose portrait or landscape and
+              a white or black board. Our print team fine-tunes the crop before
+              printing.
             </p>
           </div>
         ) : null}
@@ -963,9 +832,7 @@ export default function Designer() {
         ) : (
           <dl className="mt-5 space-y-2 text-sm">
             <div className="flex items-center justify-between text-slate-600">
-              <dt>
-                {count} x {PRODUCT.name}, sizes matched to your photos
-              </dt>
+              <dt>{count} x {PRODUCT.name}, 6 x 8 or 8 x 6 inch</dt>
               <dd className="font-medium text-slate-800">
                 {formatINR(price.subtotal)}
               </dd>
@@ -1011,7 +878,7 @@ export default function Designer() {
         >
           <MessageIcon className="h-5 w-5" />
           {sharing
-            ? "Preparing your photos..."
+            ? "Opening share..."
             : count > 0
               ? `Send order on WhatsApp - ${formatINR(price.total)}`
               : "Add a photo to continue"}
@@ -1019,8 +886,8 @@ export default function Designer() {
 
         <p className="mt-3 flex items-start justify-center gap-1.5 text-center text-xs text-slate-500">
           <CheckIcon className="mt-0.5 h-3.5 w-3.5 shrink-0 text-emerald-500" />
-          Your edited photos are shared automatically on supported phones.
-          Otherwise download them and attach in the chat.
+          Your photos are shared automatically on supported phones. Otherwise
+          download them and attach in the chat.
         </p>
       </section>
     </div>
